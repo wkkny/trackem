@@ -1,12 +1,9 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { TrackemConfig } from './contracts';
 
-export interface TrackemConfig {
-  codexProfileHomes: string[];
-  notifyOnResetExpiry: boolean;
-  resetExpiryDays: number;
-}
+export type { TrackemConfig } from './contracts';
 
 export const DEFAULT_CONFIG: TrackemConfig = {
   codexProfileHomes: [],
@@ -41,10 +38,13 @@ export function normalizeConfig(value: unknown): TrackemConfig {
   };
 }
 
-export function loadConfig(file: string): TrackemConfig {
+export function loadConfig(file: string, onError?: (message: string) => void): TrackemConfig {
   try {
     return normalizeConfig(JSON.parse(fs.readFileSync(file, 'utf8')));
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      onError?.(`Could not load preferences: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
     return { ...DEFAULT_CONFIG };
   }
 }

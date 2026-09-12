@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { flushSync } from 'react-dom';
 import {
   LuActivity,
   LuArrowRight,
@@ -29,60 +28,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { bestSnapshot } from '../electron/app-logic';
 
 const IS_MAC = /Mac/.test(navigator.platform);
-
-/** Rasterize the react-icons Codex mark at each platform's preferred tray size. */
-function useTrayIcon(): void {
-  useEffect(() => {
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    const timer = window.setTimeout(() => {
-      const pixels = IS_MAC ? 36 : 32;
-      const inset = 2;
-      const iconSize = pixels - inset * 2;
-      // Mount the actual react-icons component briefly, then serialize its SVG.
-      const host = document.createElement('div');
-      const iconRoot = createRoot(host);
-      flushSync(() => iconRoot.render(<AiOutlineOpenAI color={IS_MAC ? '#000' : '#fff'} size={iconSize} />));
-      const svg = host.querySelector('svg');
-      if (!svg) {
-        iconRoot.unmount();
-        return;
-      }
-      svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-      const svgMarkup = new XMLSerializer().serializeToString(svg);
-      iconRoot.unmount();
-      if (cancelled) return;
-      objectUrl = URL.createObjectURL(new Blob([svgMarkup], { type: 'image/svg+xml' }));
-      const image = new Image();
-      image.onload = () => {
-        if (!cancelled) {
-          const canvas = document.createElement('canvas');
-          canvas.width = pixels;
-          canvas.height = pixels;
-          const context = canvas.getContext('2d');
-          if (context) {
-            context.drawImage(image, inset, inset, iconSize, iconSize);
-            window.trackem?.setTrayIcon(canvas.toDataURL('image/png'));
-          }
-        }
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        objectUrl = null;
-      };
-      image.onerror = () => {
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        objectUrl = null;
-      };
-      image.src = objectUrl;
-    }, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, []);
-}
 
 interface ProviderBrand {
   id: string;
@@ -287,7 +235,7 @@ function CodexRow({ snapshot, refreshing }: { snapshot: UsageSnapshot | null; re
   );
 }
 
-function MiniQuota({ label, usedPercent }: { label: string; usedPercent?: number }) {
+function MiniQuota({ label, usedPercent }: { label: string; usedPercent: number | undefined }) {
   const left = usedPercent === undefined ? null : percentLeft(usedPercent);
   return (
     <div className="min-w-24 space-y-1">
@@ -421,7 +369,6 @@ const NAV_GROUPS = [
 ] as const;
 
 function App() {
-  useTrayIcon();
   const [active, setActive] = useState('Overview');
   const [codex, setCodex] = useState<UsageSnapshot[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
@@ -451,7 +398,7 @@ function App() {
   }, []);
 
   const connected = codex.filter((snapshot) => snapshot.ok);
-  const best = useMemo(() => [...connected].sort((a, b) => (a.windows.weekly?.usedPercent ?? 101) - (b.windows.weekly?.usedPercent ?? 101))[0] ?? null, [connected]);
+  const best = bestSnapshot(connected);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
@@ -483,7 +430,8 @@ function App() {
   );
 }
 
-const container = document.getElementById('root')!;
+const container = document.getElementById('root');
+if (!container) throw new Error('Trackem root element is missing');
 const root = (container as unknown as { __trackemRoot?: ReturnType<typeof createRoot> }).__trackemRoot ?? createRoot(container);
 (container as unknown as { __trackemRoot?: ReturnType<typeof createRoot> }).__trackemRoot = root;
 root.render(<App />);

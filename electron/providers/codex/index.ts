@@ -3,10 +3,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { scanSessionUsage, type SessionUsageSummary } from './sessions';
+import type { UsageSnapshot, UsageWindow } from '../../contracts';
+
+export type { UsageSnapshot, UsageWindow } from '../../contracts';
 
 const USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 const RESET_CREDITS_URL = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits';
 const FETCH_TIMEOUT_MS = 10_000;
+const MAX_REQUEST_ATTEMPTS = 2;
+const RETRY_BACKOFF_MS = 250;
+const MAX_RETRY_DELAY_MS = 5_000;
 
 export const AuthError = {
   MISSING: 'missing-credential',
@@ -16,40 +22,6 @@ export const AuthError = {
   API: 'api-failure',
   PARSE: 'parse-failure',
 } as const;
-
-export interface UsageWindow {
-  id: 'fiveHour' | 'weekly';
-  usedPercent: number;
-  resetAt: string | null;
-  windowSeconds: number | null;
-}
-
-export interface UsageSnapshot {
-  ok: boolean;
-  providerId: 'codex';
-  account: {
-    id: string;
-    label: string;
-    email: string | null;
-    home: string;
-    isDefault: boolean;
-  };
-  plan: string | null;
-  source: string;
-  updatedAt: string;
-  windows: Partial<Record<'fiveHour' | 'weekly', UsageWindow>>;
-  /** Most-used model derived from local Codex session logs (token counts per model). */
-  topModel: string | null;
-  /** Rate-limit reset credits ("reserve") from /wham/rate-limit-reset-credits. */
-  reserve: {
-    available: number;
-    nextExpiresAt: string | null;
-    expirations: string[];
-    balance: number | null;
-    unit: string;
-  } | null;
-  error?: { kind: string; message: string };
-}
 
 interface CodexProfile {
   home: string;
@@ -107,7 +79,9 @@ export function discoverProfiles(configuredHomes: string[] = []): CodexProfile[]
 
 function decodeJwtClaims(token: string): Record<string, unknown> {
   try {
-    return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>;
+    const payload = token.split('.')[1];
+    if (!payload) return {};
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
   } catch {
     return {};
   }
@@ -182,29 +156,87 @@ function buildRequestHeaders(credentials: CodexCredentials): Record<string, stri
   return headers;
 }
 
-async function request(credentials: CodexCredentials, url: string, timeout = FETCH_TIMEOUT_MS): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-  try {
-    return await fetch(url, { headers: buildRequestHeaders(credentials), signal: controller.signal });
-  } catch (error) {
-    fail(AuthError.NETWORK, `Network error contacting Codex: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    clearTimeout(timer);
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+function retryDelay(response: Response): number {
+  const retryAfter = response.headers.get('retry-after');
+  if (!retryAfter) return RETRY_BACKOFF_MS;
+
+  const seconds = Number(retryAfter);
+  const requestedDelay = Number.isFinite(seconds) && seconds >= 0
+    ? seconds * 1000
+    : Date.parse(retryAfter) - Date.now();
+  if (!Number.isFinite(requestedDelay)) return RETRY_BACKOFF_MS;
+  return Math.min(MAX_RETRY_DELAY_MS, Math.max(0, requestedDelay));
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+interface RequestResult {
+  response: Response;
+  body: string;
+}
+
+async function request(credentials: CodexCredentials, url: string, timeout = FETCH_TIMEOUT_MS): Promise<RequestResult> {
+  for (let attempt = 0; attempt < MAX_REQUEST_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    let response: Response | undefined;
+    let result: RequestResult | undefined;
+    let failure: 'network' | 'timeout' | null = null;
+
+    try {
+      response = await fetch(url, { headers: buildRequestHeaders(credentials), signal: controller.signal });
+      result = { response, body: await response.text() };
+    } catch {
+      if (response && !response.ok && !isRetryableStatus(response.status)) {
+        result = { response, body: '' };
+      } else {
+        failure = controller.signal.aborted ? 'timeout' : 'network';
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const canRetry = attempt + 1 < MAX_REQUEST_ATTEMPTS;
+    if (failure) {
+      if (canRetry) {
+        await wait(RETRY_BACKOFF_MS);
+        continue;
+      }
+      if (failure === 'timeout') fail(AuthError.NETWORK, `Codex request timed out after ${timeout} ms.`);
+      fail(AuthError.NETWORK, 'Network error contacting Codex.');
+    }
+
+    if (!result) fail(AuthError.NETWORK, 'Network error contacting Codex.');
+    if (canRetry && isRetryableStatus(result.response.status)) {
+      const delay = retryDelay(result.response);
+      await wait(delay);
+      continue;
+    }
+    return result;
   }
+
+  fail(AuthError.NETWORK, 'Network error contacting Codex.');
 }
 
 async function fetchUsageResponse(credentials: CodexCredentials): Promise<WhamUsageResponse> {
-  const response = await request(credentials, USAGE_URL);
+  const { response, body } = await request(credentials, USAGE_URL);
   if (response.status === 401 || response.status === 403) {
     fail(AuthError.EXPIRED, 'Codex token expired or invalid. Run `codex login` to re-authenticate.');
   }
   if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    fail(AuthError.API, `Codex usage API error ${response.status}: ${body.slice(0, 200)}`);
+    const safeBody = credentials.accessToken
+      ? body.split(credentials.accessToken).join('[redacted]')
+      : body;
+    fail(AuthError.API, `Codex usage API error ${response.status}: ${safeBody.slice(0, 200)}`);
   }
   try {
-    return (await response.json()) as WhamUsageResponse;
+    return JSON.parse(body) as WhamUsageResponse;
   } catch {
     fail(AuthError.PARSE, 'Codex usage API returned a non-JSON response.');
   }
@@ -279,9 +311,9 @@ function mapError(profile: CodexProfile, error: unknown): UsageSnapshot {
 /** Best-effort rate-limit reset credits ("reserve") summary. Never throws. */
 async function fetchResetCredits(credentials: CodexCredentials): Promise<ResetCreditsSummary | null> {
   try {
-    const response = await request(credentials, RESET_CREDITS_URL, 8_000);
+    const { response, body } = await request(credentials, RESET_CREDITS_URL, 8_000);
     if (!response.ok) return null;
-    const payload = (await response.json()) as {
+    const payload = JSON.parse(body) as {
       available_count?: number;
       credits?: Array<{ status?: string; expires_at?: string; redeemed_at?: string | null }>;
     };
@@ -324,9 +356,4 @@ async function getProfileSnapshot(profile: CodexProfile): Promise<UsageSnapshot>
 /** Fetch normalized snapshots for the default profile and each configured profile. Never throws. */
 export async function getSnapshots(configuredHomes: string[] = []): Promise<UsageSnapshot[]> {
   return Promise.all(discoverProfiles(configuredHomes).map(getProfileSnapshot));
-}
-
-/** Backwards-compatible single-profile helper. */
-export async function getSnapshot(): Promise<UsageSnapshot> {
-  return (await getSnapshots())[0];
 }

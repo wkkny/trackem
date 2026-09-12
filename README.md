@@ -42,6 +42,7 @@ pnpm dev
 Quality checks:
 
 ```bash
+pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
@@ -63,7 +64,9 @@ Windows packaging and tray behavior should be verified on a Windows machine befo
 ```text
 electron/
   main.ts                 Window, tray, notifications, refresh loop, and IPC
+  app-logic.ts            Shared account selection and notification logic
   config.ts               Validated, private application preferences
+  contracts.ts            Main, preload, and renderer IPC contracts
   preload.ts              Narrow contextBridge API
   providers/codex/        OAuth usage adapter and local session scanner
 src/

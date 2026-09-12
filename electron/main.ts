@@ -1,23 +1,19 @@
-import { app, BrowserWindow, Tray, Menu, Notification, ipcMain, nativeImage } from 'electron';
+import { app, BrowserWindow, Tray, Menu, Notification, ipcMain, nativeImage, session } from 'electron';
+import type { WebContents } from 'electron';
 import * as path from 'node:path';
-import { getSnapshots, type UsageSnapshot } from './providers/codex';
+import { pathToFileURL } from 'node:url';
+import { getSnapshots } from './providers/codex';
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type TrackemConfig } from './config';
+import { bestSnapshot, collectResetExpiryNotifications, createQueuedSingleFlight } from './app-logic';
+import type { DiagnosticEntry, UsageSnapshot, UsageSnapshotPayload } from './contracts';
 
 // Tray-only on macOS: no Dock icon, the tray menu is the entry point.
 if (process.platform === 'darwin') app.dock?.hide();
 
-export interface DiagnosticEntry {
-  id: string;
-  level: 'info' | 'error';
-  providerId: 'codex' | 'system';
-  accountLabel: string | null;
-  message: string;
-  timestamp: string;
-}
-
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
+let isQuitting = false;
 let latestCodexSnapshots: UsageSnapshot[] = [];
 let config: TrackemConfig = { ...DEFAULT_CONFIG };
 let configFile = '';
@@ -26,9 +22,31 @@ const diagnostics: DiagnosticEntry[] = [];
 const sentResetNotifications = new Set<string>();
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const DEVELOPMENT_RENDERER_URL = 'http://localhost:5173/';
 
-// eslint-disable-next-line no-var
-declare global { var isQuitting: boolean; }
+function rendererUrl(): string {
+  return app.isPackaged
+    ? pathToFileURL(path.join(__dirname, '../../dist/index.html')).href
+    : DEVELOPMENT_RENDERER_URL;
+}
+
+function isAllowedNavigation(url: string): boolean {
+  try {
+    const target = new URL(url);
+    const allowed = new URL(rendererUrl());
+    return app.isPackaged ? target.href === allowed.href : target.origin === allowed.origin;
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedSender(sender: WebContents): boolean {
+  return mainWindow !== null && sender === mainWindow.webContents && isAllowedNavigation(sender.getURL());
+}
+
+function assertTrustedSender(sender: WebContents): void {
+  if (!isTrustedSender(sender)) throw new Error('Blocked IPC request from an untrusted renderer');
+}
 
 function addDiagnostic(
   level: DiagnosticEntry['level'],
@@ -47,7 +65,7 @@ function addDiagnostic(
   if (diagnostics.length > 100) diagnostics.length = 100;
 }
 
-function payload() {
+function payload(): UsageSnapshotPayload {
   return { codex: latestCodexSnapshots, diagnostics: [...diagnostics] };
 }
 
@@ -58,7 +76,7 @@ function createWindow(): void {
     minWidth: 760,
     minHeight: 600,
     frame: false,
-    titleBarStyle: process.platform === 'darwin' ? 'hidden' : undefined,
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const } : {}),
     trafficLightPosition: { x: 20, y: 20 },
     backgroundColor: '#f7f8fa',
     show: false,
@@ -70,31 +88,25 @@ function createWindow(): void {
     },
   });
   if (app.isPackaged) {
-    void mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
+    void mainWindow.loadURL(rendererUrl()).catch((error: unknown) => {
+      addDiagnostic('error', 'system', `Could not load the app window: ${error instanceof Error ? error.message : 'unknown error'}`);
+    });
   } else {
-    void mainWindow.loadURL('http://localhost:5173');
+    void mainWindow.loadURL(rendererUrl()).catch((error: unknown) => {
+      addDiagnostic('error', 'system', `Could not load the development server: ${error instanceof Error ? error.message : 'unknown error'}`);
+    });
   }
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    const allowed = app.isPackaged ? url.startsWith('file:') : url.startsWith('http://localhost:5173');
-    if (!allowed) event.preventDefault();
+    if (!isAllowedNavigation(url)) event.preventDefault();
   });
   mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.on('close', (event) => {
-    if (!global.isQuitting) {
+    if (!isQuitting) {
       event.preventDefault();
       mainWindow?.hide();
     }
   });
-}
-
-function bestSnapshot(snapshots: UsageSnapshot[]): UsageSnapshot | null {
-  const connected = snapshots.filter((snapshot) => snapshot.ok);
-  return connected.sort((a, b) => {
-    const aUsed = a.windows.weekly?.usedPercent ?? a.windows.fiveHour?.usedPercent ?? 101;
-    const bUsed = b.windows.weekly?.usedPercent ?? b.windows.fiveHour?.usedPercent ?? 101;
-    return aUsed - bUsed;
-  })[0] ?? null;
 }
 
 function updateTrayTooltip(): void {
@@ -113,28 +125,22 @@ function updateTrayTooltip(): void {
 }
 
 function notifyExpiringResets(snapshots: UsageSnapshot[]): void {
-  if (!config.notifyOnResetExpiry || !Notification.isSupported()) return;
-  const threshold = config.resetExpiryDays * 24 * 60 * 60 * 1000;
-  for (const snapshot of snapshots) {
-    if (!snapshot.ok || !snapshot.reserve || snapshot.reserve.available <= 0) continue;
-    const expiry = snapshot.reserve.nextExpiresAt;
-    if (!expiry) continue;
-    const remaining = new Date(expiry).getTime() - Date.now();
-    if (remaining <= 0 || remaining > threshold) continue;
-    const notificationKey = `${snapshot.account.id}:${expiry}`;
-    if (sentResetNotifications.has(notificationKey)) continue;
-    sentResetNotifications.add(notificationKey);
-    const days = Math.max(1, Math.ceil(remaining / (24 * 60 * 60 * 1000)));
-    new Notification({
-      title: 'Codex reset expiring soon',
-      body: `${snapshot.account.label} has ${snapshot.reserve.available} banked reset${snapshot.reserve.available === 1 ? '' : 's'}; the next expires in ${days} day${days === 1 ? '' : 's'}.`,
-    }).show();
+  if (!Notification.isSupported()) return;
+  for (const notification of collectResetExpiryNotifications(snapshots, config, sentResetNotifications)) {
+    new Notification({ title: notification.title, body: notification.body }).show();
   }
 }
 
-async function refreshUsage(): Promise<void> {
+async function performRefresh(): Promise<void> {
   const startedAt = Date.now();
-  latestCodexSnapshots = await getSnapshots(config.codexProfileHomes);
+  let snapshots: UsageSnapshot[];
+  try {
+    snapshots = await getSnapshots(config.codexProfileHomes);
+  } catch (error) {
+    addDiagnostic('error', 'system', `Usage refresh failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+    return;
+  }
+  latestCodexSnapshots = snapshots;
   for (const snapshot of latestCodexSnapshots) {
     addDiagnostic(
       snapshot.ok ? 'info' : 'error',
@@ -152,14 +158,23 @@ async function refreshUsage(): Promise<void> {
   }
 }
 
+const refreshUsage = createQueuedSingleFlight(performRefresh);
+
 function startRefreshLoop(): void {
   void refreshUsage();
   refreshTimer = setInterval(() => void refreshUsage(), REFRESH_INTERVAL_MS);
 }
 
 function createTray(): void {
-  // Placeholder until the renderer rasterizes the react-icons Codex logo.
-  tray = new Tray(nativeImage.createEmpty());
+  const resourceDirectory = app.isPackaged ? process.resourcesPath : path.join(__dirname, '../..', 'build');
+  const templateImage = process.platform === 'darwin'
+    ? nativeImage.createFromPath(path.join(resourceDirectory, 'trayTemplate.png'))
+    : nativeImage.createEmpty();
+  const image = templateImage.isEmpty()
+    ? nativeImage.createFromPath(path.join(resourceDirectory, 'icon.png')).resize({ width: 24, height: 24 })
+    : templateImage;
+  if (process.platform === 'darwin' && !templateImage.isEmpty()) image.setTemplateImage(true);
+  tray = new Tray(image);
   tray.setToolTip('Trackem — usage at a glance');
   tray.on('click', () => {
     if (mainWindow?.isVisible()) mainWindow.hide();
@@ -188,7 +203,7 @@ function buildTrayMenu(): Menu {
     {
       label: 'Quit',
       click: () => {
-        global.isQuitting = true;
+        isQuitting = true;
         app.quit();
       },
     },
@@ -196,40 +211,47 @@ function buildTrayMenu(): Menu {
 }
 
 app.whenReady().then(() => {
-  global.isQuitting = false;
   configFile = path.join(app.getPath('userData'), 'config.json');
-  config = loadConfig(configFile);
+  config = loadConfig(configFile, (message) => addDiagnostic('error', 'system', message));
   addDiagnostic('info', 'system', 'Trackem started');
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   createWindow();
   createTray();
   startRefreshLoop();
-});
-
-ipcMain.handle('usage:get', () => payload());
-ipcMain.handle('usage:refresh', () => refreshUsage());
-ipcMain.handle('config:get', () => ({ config, file: configFile }));
-ipcMain.handle('config:set', async (_event, nextConfig: unknown) => {
-  config = saveConfig(configFile, nextConfig);
-  addDiagnostic('info', 'system', 'Preferences saved');
-  await refreshUsage();
-  return { config, file: configFile };
-});
-ipcMain.on('tray:set-icon', (_event, dataUrl: string) => {
-  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) return;
-  try {
-    const image = nativeImage.createFromDataURL(dataUrl);
-    if (process.platform === 'darwin') image.setTemplateImage(true);
-    tray?.setImage(image);
-  } catch {
-    addDiagnostic('error', 'system', 'Renderer supplied an invalid tray icon');
-  }
-});
-ipcMain.on('app:quit', () => {
-  global.isQuitting = true;
+}).catch((error: unknown) => {
+  console.error('Trackem failed to start:', error);
   app.quit();
 });
-ipcMain.on('window:minimize', () => mainWindow?.hide());
+
+ipcMain.handle('usage:get', (event) => {
+  assertTrustedSender(event.sender);
+  return payload();
+});
+ipcMain.handle('usage:refresh', (event) => {
+  assertTrustedSender(event.sender);
+  return refreshUsage();
+});
+ipcMain.handle('config:get', (event) => {
+  assertTrustedSender(event.sender);
+  return { config, file: configFile };
+});
+ipcMain.handle('config:set', async (event, nextConfig: unknown) => {
+  assertTrustedSender(event.sender);
+  config = saveConfig(configFile, nextConfig);
+  addDiagnostic('info', 'system', 'Preferences saved');
+  await refreshUsage(true);
+  return { config, file: configFile };
+});
+ipcMain.on('app:quit', (event) => {
+  if (!isTrustedSender(event.sender)) return;
+  isQuitting = true;
+  app.quit();
+});
+ipcMain.on('window:minimize', (event) => {
+  if (isTrustedSender(event.sender)) mainWindow?.hide();
+});
 app.on('window-all-closed', () => undefined);
 app.on('before-quit', () => {
+  isQuitting = true;
   if (refreshTimer) clearInterval(refreshTimer);
 });

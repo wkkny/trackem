@@ -30,7 +30,20 @@ describe('config', () => {
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
-  it('uses defaults for missing or malformed files', () => {
-    expect(loadConfig('/definitely/missing/trackem.json')).toEqual(DEFAULT_CONFIG);
+  it('uses defaults for a missing file without reporting an error', () => {
+    const errors: string[] = [];
+    expect(loadConfig('/definitely/missing/trackem.json', (message) => errors.push(message))).toEqual(DEFAULT_CONFIG);
+    expect(errors).toEqual([]);
+  });
+
+  it('reports malformed files before using defaults', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-config-'));
+    directories.push(directory);
+    const file = path.join(directory, 'config.json');
+    fs.writeFileSync(file, 'not JSON');
+    const errors: string[] = [];
+
+    expect(loadConfig(file, (message) => errors.push(message))).toEqual(DEFAULT_CONFIG);
+    expect(errors[0]).toContain('Could not load preferences');
   });
 });
