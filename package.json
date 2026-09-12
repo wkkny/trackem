@@ -1,48 +1,39 @@
 {
   "name": "trackem",
   "version": "0.1.0",
-  "description": "A system tray usage monitor for AI subscriptions.",
+  "description": "A native menu bar and system tray monitor for Codex usage.",
   "main": "electron/dist/main.js",
   "private": true,
   "author": "Trackem",
   "license": "MIT",
   "scripts": {
-    "dev": "pnpm build:electron && concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "build": "pnpm build:renderer && pnpm build:electron",
-    "build:renderer": "tsc --noEmit -p tsconfig.json && vite build",
-    "build:electron": "tsc -p electron/tsconfig.json",
-    "start": "electron .",
-    "lint": "biome lint .",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p electron/tsconfig.json && tsc -p electron/tsconfig.test.json",
+    "dev": "node scripts/platform.mjs dev",
+    "dev:mac": "swift run --package-path macos Trackem",
+    "dev:win": "pnpm build:electron && electron .",
+    "build": "node scripts/platform.mjs build",
+    "build:electron": "node scripts/build-electron.mjs",
+    "build:mac": "swift build --package-path macos -c release",
+    "lint": "biome lint electron scripts package.json",
+    "typecheck": "tsc --noEmit -p electron/tsconfig.json && tsc -p electron/tsconfig.test.json",
     "test": "vitest run",
-    "test:watch": "vitest",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "dist": "pnpm build && electron-builder --publish never",
-    "dist:mac": "pnpm build && electron-builder --mac --publish never",
-    "dist:win": "pnpm build && electron-builder --win --publish never"
+    "dist": "node scripts/platform.mjs dist",
+    "dist:mac": "sh scripts/build-macos-app.sh",
+    "dist:win": "pnpm build:electron && electron-builder --win --publish never"
   },
   "build": {
     "appId": "com.trackem.app",
     "productName": "Trackem",
     "files": [
-      "dist/**/*",
       "electron/dist/**/*",
       "package.json"
     ],
     "extraResources": [
       {
-        "from": "build/trayTemplate.png",
-        "to": "trayTemplate.png"
-      },
-      {
-        "from": "build/icon.png",
-        "to": "icon.png"
+        "from": "build/icon.ico",
+        "to": "icon.ico"
       }
     ],
-    "mac": {
-      "icon": "build/icon.icns",
-      "category": "public.app-category.productivity"
-    },
     "win": {
       "icon": "build/icon.ico",
       "target": [{ "target": "nsis", "arch": ["x64"] }]
@@ -56,32 +47,14 @@
       "shortcutName": "Trackem"
     }
   },
-  "dependencies": {
-    "@tailwindcss/vite": "^4.3.3",
-    "class-variance-authority": "^0.7.1",
-    "cn": "^0.2.6",
-    "lucide-react": "^1.44.0",
-    "radix-ui": "^1.6.7",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "react-icons": "^5.7.0",
-    "tailwindcss": "^4.3.3",
-    "tw-animate-css": "^1.4.0"
-  },
+  "dependencies": {},
   "packageManager": "pnpm@12.3.4",
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",
     "@types/node": "^22.20.2",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.1",
-    "concurrently": "^10.0.5",
     "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
-    "shadcn": "^4.21.0",
     "typescript": "^5.9.3",
-    "vite": "^8.3.0",
-    "vitest": "^5.0.0",
-    "wait-on": "^9.1.0"
+    "vitest": "^5.0.0"
   }
 }
