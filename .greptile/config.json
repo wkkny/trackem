@@ -1,0 +1,36 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "triggerOnUpdates": true,
+  "statusCheck": true,
+  "statusCommentsEnabled": true,
+  "fixWithAI": true,
+  "ignorePatterns": "node_modules/**\ndist/**\nrelease/**\n*.tsbuildinfo\n*.log\n.DS_Store",
+  "instructions": "This is a strict TypeScript Electron app built with pnpm, React, and Vite. Prioritize correctness, security, privacy, and cross-platform behavior over cosmetic style comments. Treat the Electron main process, preload bridge, and renderer as separate trust boundaries. Review changes against the existing test and build scripts in package.json.",
+  "rules": [
+    {
+      "id": "electron-security-boundaries",
+      "rule": "Preserve Electron security boundaries. Keep nodeIntegration disabled, contextIsolation enabled, and the preload API narrow. Validate untrusted IPC inputs and do not expose Node.js capabilities directly to the renderer.",
+      "scope": ["electron/**", "src/**"],
+      "severity": "high"
+    },
+    {
+      "id": "credential-privacy",
+      "rule": "Never log, persist, send to the renderer, or include in diagnostics an OAuth token or raw auth.json content. Preserve the read-only credential handling contract and keep authentication data in the main process.",
+      "scope": ["electron/**", "src/**"],
+      "severity": "high"
+    },
+    {
+      "id": "external-operation-failures",
+      "rule": "Review filesystem, network, IPC, and timer changes for explicit failure handling, bounded waits, and safe cleanup. Preserve best-effort behavior where a missing profile or session log should not crash the app.",
+      "scope": ["electron/**"],
+      "severity": "medium"
+    },
+    {
+      "id": "behavioral-tests",
+      "rule": "Require or update deterministic tests when changing usage calculations, config normalization or persistence, credential parsing, provider response mapping, or session-log scanning. Do not add tests that depend on live Codex credentials or network access.",
+      "scope": ["electron/**", "src/**"],
+      "severity": "medium"
+    }
+  ]
+}

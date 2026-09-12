@@ -89,6 +89,19 @@ describe('Codex profiles', () => {
     expect(snapshots[2]).toMatchObject({ ok: false, error: { kind: 'missing-credential' } });
     expect(fetch).toHaveBeenCalledTimes(4);
   });
+
+  it('distinguishes valid JSON without quota windows from a non-JSON response', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-invalid-usage-'));
+    directories.push(home);
+    process.env.CODEX_HOME = home;
+    writeAuth(home, 'personal@example.com', 'account-one');
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('{}'));
+    expect((await getSnapshots())[0]?.error?.message).toBe('Codex did not provide supported quota windows.');
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('not json'));
+    expect((await getSnapshots())[0]?.error?.message).toBe('Codex usage API returned a non-JSON response.');
+  });
 });
 
 describe('Codex normalization', () => {
@@ -98,10 +111,11 @@ describe('Codex normalization', () => {
     expect(isTokenExpired('not-a-jwt', 11_000)).toBe(false);
   });
 
-  it('clamps percentages and rejects non-finite data', () => {
-    expect(mapWindow({ used_percent: 130 }, 'weekly')?.usedPercent).toBe(100);
-    expect(mapWindow({ used_percent: -3 }, 'fiveHour')?.usedPercent).toBe(0);
+  it('rejects invalid percentages instead of displaying invented boundaries', () => {
+    expect(mapWindow({ used_percent: 130 }, 'weekly')).toBeNull();
+    expect(mapWindow({ used_percent: -3 }, 'fiveHour')).toBeNull();
     expect(mapWindow({ used_percent: Number.NaN }, 'weekly')).toBeNull();
+    expect(mapWindow({ used_percent: 40, reset_at: 1e20 }, 'weekly')?.resetAt).toBeNull();
   });
 });
 
@@ -274,7 +288,7 @@ describe('Codex requests', () => {
     expect(usageAttempts).toBe(2);
   });
 
-  it('redacts the access token from API errors and does not retry ordinary 4xx responses', async () => {
+  it('does not expose the access token in API errors or retry ordinary 4xx responses', async () => {
     const home = createAuthenticatedHome();
     const accessToken = 'secret-access-token';
     writeAuth(home, 'person@example.com', 'account-one', accessToken);
@@ -282,7 +296,7 @@ describe('Codex requests', () => {
 
     const snapshot = firstSnapshot(await getSnapshots());
 
-    expect(snapshot.error?.message).toContain('[redacted]');
+    expect(snapshot.error?.message).toContain('HTTP 400');
     expect(snapshot.error?.message).not.toContain(accessToken);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
