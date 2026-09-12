@@ -11,7 +11,7 @@ function run(command, args) {
 function runPnpm(args) {
   const pnpmScript = process.env.npm_execpath;
   if (!pnpmScript) throw new Error('pnpm executable path is unavailable.');
-  run(process.execPath, [pnpmScript, ...args]);
+  run(pnpmScript, args);
 }
 
 if (process.platform === 'darwin') {
