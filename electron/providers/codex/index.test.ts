@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { discoverProfiles, getSnapshots, isTokenExpired, mapWindow, type UsageSnapshot } from './index';
+import { getSnapshot, isTokenExpired, mapWindow } from './index';
 
 const directories: string[] = [];
 const originalCodexHome = process.env.CODEX_HOME;
@@ -40,17 +40,10 @@ function usageResponse(): Response {
   }), { status: 200 });
 }
 
-function firstSnapshot(snapshots: UsageSnapshot[]): UsageSnapshot {
-  const snapshot = snapshots[0];
-  if (!snapshot) throw new Error('Expected one Codex snapshot');
-  return snapshot;
-}
-
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-    const url = String(input);
-    if (url.endsWith('/wham/usage')) return usageResponse();
-    return new Response(JSON.stringify({ available_count: 2, credits: [] }), { status: 200 });
+    void input;
+    return usageResponse();
   }));
 });
 
@@ -62,32 +55,11 @@ afterEach(() => {
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 
-describe('Codex profiles', () => {
-  it('deduplicates the default and configured homes', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-profile-'));
-    directories.push(home);
-    process.env.CODEX_HOME = home;
-    expect(discoverProfiles([home, path.join(home, 'other')])).toEqual([
-      { home: path.resolve(home), isDefault: true },
-      { home: path.resolve(home, 'other'), isDefault: false },
-    ]);
-  });
-
-  it('fetches independent account snapshots and preserves missing-profile errors', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-default-'));
-    const second = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-second-'));
-    const missing = path.join(os.tmpdir(), `trackem-missing-${Date.now()}`);
-    directories.push(home, second);
-    process.env.CODEX_HOME = home;
-    writeAuth(home, 'personal@example.com', 'account-one');
-    writeAuth(second, 'work@example.com', 'account-two');
-
-    const snapshots = await getSnapshots([second, missing]);
-    expect(snapshots).toHaveLength(3);
-    expect(snapshots[0]).toMatchObject({ ok: true, plan: 'plus', account: { label: 'personal@example.com', isDefault: true } });
-    expect(snapshots[1]).toMatchObject({ ok: true, account: { label: 'work@example.com', isDefault: false } });
-    expect(snapshots[2]).toMatchObject({ ok: false, error: { kind: 'missing-credential' } });
-    expect(fetch).toHaveBeenCalledTimes(4);
+describe('Codex account', () => {
+  it('fetches the default account snapshot', async () => {
+    createAuthenticatedHome();
+    const snapshot = await getSnapshot();
+    expect(snapshot).toMatchObject({ ok: true, plan: 'plus' });
   });
 
   it('distinguishes valid JSON without quota windows from a non-JSON response', async () => {
@@ -97,10 +69,10 @@ describe('Codex profiles', () => {
     writeAuth(home, 'personal@example.com', 'account-one');
 
     vi.mocked(fetch).mockResolvedValueOnce(new Response('{}'));
-    expect((await getSnapshots())[0]?.error?.message).toBe('Codex did not provide supported quota windows.');
+    expect((await getSnapshot()).error?.message).toBe('Codex did not provide supported quota windows.');
 
     vi.mocked(fetch).mockResolvedValueOnce(new Response('not json'));
-    expect((await getSnapshots())[0]?.error?.message).toBe('Codex usage API returned a non-JSON response.');
+    expect((await getSnapshot()).error?.message).toBe('Codex usage API returned a non-JSON response.');
   });
 });
 
@@ -124,7 +96,7 @@ describe('Codex requests', () => {
     createAuthenticatedHome();
     vi.mocked(fetch).mockResolvedValue(new Response('unauthorized', { status }));
 
-    const snapshot = firstSnapshot(await getSnapshots());
+    const snapshot = await getSnapshot();
 
     expect(snapshot).toMatchObject({
       ok: false,
@@ -137,7 +109,7 @@ describe('Codex requests', () => {
     createAuthenticatedHome();
     vi.mocked(fetch).mockResolvedValue(new Response('not JSON', { status: 200 }));
 
-    const snapshot = firstSnapshot(await getSnapshots());
+    const snapshot = await getSnapshot();
 
     expect(snapshot).toMatchObject({
       ok: false,
@@ -159,9 +131,9 @@ describe('Codex requests', () => {
       return new Response(JSON.stringify({ available_count: 0, credits: [] }), { status: 200 });
     });
 
-    const snapshotsPromise = getSnapshots();
+    const snapshotPromise = getSnapshot();
     await vi.advanceTimersByTimeAsync(250);
-    const snapshot = firstSnapshot(await snapshotsPromise);
+    const snapshot = await snapshotPromise;
 
     expect(snapshot).toMatchObject({ ok: true, plan: 'plus' });
     expect(usageAttempts).toBe(2);
@@ -172,20 +144,30 @@ describe('Codex requests', () => {
     createAuthenticatedHome();
     let usageAttempts = 0;
     vi.mocked(fetch).mockImplementation(async (input) => {
-      if (String(input).endsWith('/wham/usage')) {
-        usageAttempts += 1;
-        if (usageAttempts === 1) {
-          return new Response('unavailable', { status: 503, headers: { 'Retry-After': '0' } });
-        }
-        return usageResponse();
+      if (!String(input).endsWith('/wham/usage')) {
+        return new Response(JSON.stringify({ available_count: 1 }), { status: 200 });
       }
-      return new Response('{}', { status: 200 });
+      usageAttempts += 1;
+      if (usageAttempts === 1) {
+        return new Response('unavailable', { status: 503, headers: { 'Retry-After': '0' } });
+      }
+      return usageResponse();
     });
 
-    const snapshot = firstSnapshot(await getSnapshots());
+    const snapshot = await getSnapshot();
 
     expect(snapshot.ok).toBe(true);
     expect(usageAttempts).toBe(2);
+  });
+
+  it('reports the number of available banked resets', async () => {
+    createAuthenticatedHome();
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input).endsWith('/wham/usage')) return usageResponse();
+      return new Response(JSON.stringify({ available_count: 3 }), { status: 200 });
+    });
+
+    expect(await getSnapshot()).toMatchObject({ ok: true, bankedResets: 3 });
   });
 
   it('retries timed-out requests once and clears both attempt timers', async () => {
@@ -195,13 +177,13 @@ describe('Codex requests', () => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
     }));
 
-    const snapshotsPromise = getSnapshots();
+    const snapshotPromise = getSnapshot();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(fetch).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(250);
     expect(fetch).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(10_000);
-    const snapshot = firstSnapshot(await snapshotsPromise);
+    const snapshot = await snapshotPromise;
 
     expect(snapshot).toMatchObject({
       ok: false,
@@ -226,11 +208,11 @@ describe('Codex requests', () => {
       return new Response(stream, { status: 200 });
     });
 
-    const snapshotsPromise = getSnapshots();
+    const snapshotPromise = getSnapshot();
     await vi.advanceTimersByTimeAsync(10_000);
     await vi.advanceTimersByTimeAsync(250);
     await vi.advanceTimersByTimeAsync(10_000);
-    const snapshot = firstSnapshot(await snapshotsPromise);
+    const snapshot = await snapshotPromise;
 
     expect(snapshot).toMatchObject({
       ok: false,
@@ -256,9 +238,9 @@ describe('Codex requests', () => {
       return new Response(stream, { status: 401 });
     });
 
-    const snapshotsPromise = getSnapshots();
+    const snapshotPromise = getSnapshot();
     await vi.advanceTimersByTimeAsync(10_000);
-    const snapshot = firstSnapshot(await snapshotsPromise);
+    const snapshot = await snapshotPromise;
 
     expect(snapshot.error?.kind).toBe('authentication-expired');
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -278,11 +260,11 @@ describe('Codex requests', () => {
       return new Response('{}', { status: 200 });
     });
 
-    const snapshotsPromise = getSnapshots();
+    const snapshotPromise = getSnapshot();
     await vi.advanceTimersByTimeAsync(4_999);
     expect(usageAttempts).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
-    const snapshot = firstSnapshot(await snapshotsPromise);
+    const snapshot = await snapshotPromise;
 
     expect(snapshot.ok).toBe(true);
     expect(usageAttempts).toBe(2);
@@ -294,33 +276,11 @@ describe('Codex requests', () => {
     writeAuth(home, 'person@example.com', 'account-one', accessToken);
     vi.mocked(fetch).mockResolvedValue(new Response(`invalid token ${accessToken}`, { status: 400 }));
 
-    const snapshot = firstSnapshot(await getSnapshots());
+    const snapshot = await getSnapshot();
 
     expect(snapshot.error?.message).toContain('HTTP 400');
     expect(snapshot.error?.message).not.toContain(accessToken);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('filters redeemed, expired, and elapsed reset credits', async () => {
-    createAuthenticatedHome();
-    vi.mocked(fetch).mockImplementation(async (input) => {
-      if (String(input).endsWith('/wham/usage')) return usageResponse();
-      return new Response(JSON.stringify({
-        credits: [
-          { status: 'available', expires_at: '2999-01-02T00:00:00.000Z', redeemed_at: null },
-          { status: 'available', expires_at: '2999-01-03T00:00:00.000Z', redeemed_at: '2026-01-01T00:00:00.000Z' },
-          { status: 'expired', expires_at: '2999-01-04T00:00:00.000Z', redeemed_at: null },
-          { status: 'available', expires_at: '2000-01-01T00:00:00.000Z', redeemed_at: null },
-        ],
-      }), { status: 200 });
-    });
-
-    const snapshot = firstSnapshot(await getSnapshots());
-
-    expect(snapshot.reserve).toMatchObject({
-      available: 1,
-      nextExpiresAt: '2999-01-02T00:00:00.000Z',
-      expirations: ['2999-01-02T00:00:00.000Z'],
-    });
-  });
 });

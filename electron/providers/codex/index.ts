@@ -1,11 +1,22 @@
-import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { scanSessionUsage, type SessionUsageSummary } from './sessions';
-import type { UsageSnapshot, UsageWindow } from '../../contracts';
 
-export type { UsageSnapshot, UsageWindow } from '../../contracts';
+export interface UsageWindow {
+  id: 'fiveHour' | 'weekly';
+  usedPercent: number;
+  resetAt: string | null;
+  windowSeconds: number | null;
+}
+
+export interface UsageSnapshot {
+  ok: boolean;
+  plan: string | null;
+  updatedAt: string;
+  windows: Partial<Record<UsageWindow['id'], UsageWindow>>;
+  bankedResets: number | null;
+  error?: { kind: string; message: string };
+}
 
 const USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 const RESET_CREDITS_URL = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits';
@@ -23,17 +34,14 @@ export const AuthError = {
   PARSE: 'parse-failure',
 } as const;
 
-interface CodexProfile {
+interface CodexHome {
   home: string;
-  isDefault: boolean;
 }
 
 interface CodexCredentials {
   accessToken: string;
   accountId: string | null;
-  email: string | null;
   expired: boolean;
-  path: string;
 }
 
 interface WhamWindow {
@@ -48,17 +56,6 @@ interface WhamUsageResponse {
     primary_window?: WhamWindow;
     secondary_window?: WhamWindow;
   };
-  credits?: {
-    has_credits?: boolean;
-    unlimited?: boolean;
-    balance?: number;
-  };
-}
-
-interface ResetCreditsSummary {
-  available: number;
-  nextExpiresAt: string | null;
-  expirations: string[];
 }
 
 function fail(kind: string, message: string): never {
@@ -71,12 +68,6 @@ export function defaultCodexHome(): string {
   return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
 }
 
-export function discoverProfiles(configuredHomes: string[] = []): CodexProfile[] {
-  const defaultHome = defaultCodexHome();
-  const homes = [defaultHome, ...configuredHomes.map((home) => path.resolve(home))];
-  return [...new Set(homes)].slice(0, 21).map((home) => ({ home, isDefault: home === defaultHome }));
-}
-
 function decodeJwtClaims(token: string): Record<string, unknown> {
   try {
     const payload = token.split('.')[1];
@@ -87,28 +78,14 @@ function decodeJwtClaims(token: string): Record<string, unknown> {
   }
 }
 
-function profileAccount(profile: CodexProfile, credentials?: CodexCredentials): UsageSnapshot['account'] {
-  const email = credentials?.email ?? null;
-  const profileName = path.basename(profile.home);
-  const label = email ?? (profile.isDefault ? 'Default Codex' : profileName);
-  const stableSource = credentials?.accountId || profile.home;
-  return {
-    id: crypto.createHash('sha256').update(stableSource).digest('hex').slice(0, 12),
-    label,
-    email,
-    home: profile.home,
-    isDefault: profile.isDefault,
-  };
-}
-
 /** Read Codex OAuth credentials. Read-only: the Codex CLI owns auth.json token lifecycle. */
-function readCredentials(profile: CodexProfile): CodexCredentials {
-  const file = path.join(profile.home, 'auth.json');
+function readCredentials(codexHome: CodexHome): CodexCredentials {
+  const file = path.join(codexHome.home, 'auth.json');
   let raw: string;
   try {
     raw = fs.readFileSync(file, 'utf8');
   } catch {
-    fail(AuthError.MISSING, `No Codex credentials found at ${file}. Run \`codex login\` for this profile.`);
+    fail(AuthError.MISSING, `No Codex credentials found at ${file}. Run \`codex login\`.`);
   }
 
   let parsed: Record<string, unknown>;
@@ -125,18 +102,10 @@ function readCredentials(profile: CodexProfile): CodexCredentials {
   }
 
   const accountId = typeof tokens?.account_id === 'string' ? tokens.account_id : null;
-  const idToken = typeof tokens?.id_token === 'string' ? tokens.id_token : null;
-  const claims = decodeJwtClaims(idToken ?? accessToken);
-  const profileClaim = claims['https://api.openai.com/profile'];
-  const profileData = profileClaim && typeof profileClaim === 'object' ? (profileClaim as Record<string, unknown>) : {};
-  const email = typeof claims.email === 'string' ? claims.email : typeof profileData.email === 'string' ? profileData.email : null;
-
   return {
     accessToken,
     accountId,
-    email,
     expired: isTokenExpired(accessToken),
-    path: file,
   };
 }
 
@@ -252,58 +221,35 @@ export function mapWindow(window: WhamWindow | undefined, id: UsageWindow['id'])
   };
 }
 
-function mapSnapshot(
-  profile: CodexProfile,
-  credentials: CodexCredentials,
-  data: WhamUsageResponse,
-  resetCredits: ResetCreditsSummary | null,
-  sessionUsage: SessionUsageSummary | null,
-): UsageSnapshot {
+function mapSnapshot(data: WhamUsageResponse, bankedResets: number | null): UsageSnapshot {
   const windows: UsageSnapshot['windows'] = {};
   const fiveHour = mapWindow(data.rate_limit?.primary_window, 'fiveHour');
   const weekly = mapWindow(data.rate_limit?.secondary_window, 'weekly');
   if (fiveHour) windows.fiveHour = fiveHour;
   if (weekly) windows.weekly = weekly;
 
-  const credits = data.credits ?? {};
-  const balance = credits.has_credits && !credits.unlimited && typeof credits.balance === 'number' ? credits.balance : null;
-  const reserve = resetCredits
-    ? { ...resetCredits, balance, unit: 'credits' }
-    : balance !== null
-      ? { available: null, nextExpiresAt: null, expirations: [], balance, unit: 'credits' }
-      : null;
-
   return {
     ok: true,
-    providerId: 'codex',
-    account: profileAccount(profile, credentials),
     plan: typeof data.plan_type === 'string' ? data.plan_type : null,
-    source: credentials.path,
     updatedAt: new Date().toISOString(),
     windows,
-    topModel: sessionUsage?.topModel ?? null,
-    reserve,
+    bankedResets,
   };
 }
 
-function mapError(profile: CodexProfile, error: unknown): UsageSnapshot {
+function mapError(error: unknown): UsageSnapshot {
   const err = error as Error & { kind?: string };
   return {
     ok: false,
-    providerId: 'codex',
-    account: profileAccount(profile),
     plan: null,
-    source: path.join(profile.home, 'auth.json'),
     updatedAt: new Date().toISOString(),
     windows: {},
-    topModel: null,
-    reserve: null,
+    bankedResets: null,
     error: { kind: err.kind ?? AuthError.API, message: err.message || 'Unknown Codex error' },
   };
 }
 
-/** Best-effort rate-limit reset credits ("reserve") summary. Never throws. */
-async function fetchResetCredits(credentials: CodexCredentials): Promise<ResetCreditsSummary | null> {
+async function fetchBankedResets(credentials: CodexCredentials): Promise<number | null> {
   try {
     const { response, body } = await request(credentials, RESET_CREDITS_URL, 8_000);
     if (!response.ok) return null;
@@ -311,52 +257,34 @@ async function fetchResetCredits(credentials: CodexCredentials): Promise<ResetCr
       available_count?: number;
       credits?: Array<{ status?: string; expires_at?: string; redeemed_at?: string | null }>;
     };
-    if (!payload || (!Array.isArray(payload.credits) && typeof payload.available_count !== 'number')) return null;
-    if (payload.available_count !== undefined && (!Number.isInteger(payload.available_count) || payload.available_count < 0)) return null;
+    if (typeof payload.available_count === 'number') {
+      return Number.isInteger(payload.available_count) && payload.available_count >= 0 ? payload.available_count : null;
+    }
+    if (!Array.isArray(payload.credits)) return null;
     const now = Date.now();
-    const stillAvailable = (payload.credits ?? []).filter((credit) => {
+    return payload.credits.filter(credit => {
       if (credit.redeemed_at || credit.status === 'expired') return false;
-      if (typeof credit.expires_at === 'string' && new Date(credit.expires_at).getTime() <= now) return false;
-      return true;
-    });
-    const expirations = stillAvailable
-      .map((credit) => (typeof credit.expires_at === 'string' ? new Date(credit.expires_at).getTime() : NaN))
-      .filter(Number.isFinite)
-      .sort((a, b) => a - b)
-      .map((time) => new Date(time).toISOString());
-    return {
-      available: typeof payload.available_count === 'number' ? payload.available_count : stillAvailable.length,
-      nextExpiresAt: expirations[0] ?? null,
-      expirations: expirations.slice(0, 6),
-    };
+      if (typeof credit.expires_at !== 'string') return true;
+      const expiresAt = Date.parse(credit.expires_at);
+      return Number.isFinite(expiresAt) && expiresAt > now;
+    }).length;
   } catch {
     return null;
   }
 }
 
-async function getProfileSnapshot(profile: CodexProfile, scanModels: boolean): Promise<UsageSnapshot> {
+async function getCodexSnapshot(codexHome: CodexHome): Promise<UsageSnapshot> {
   try {
-    const credentials = readCredentials(profile);
-    if (credentials.expired) fail(AuthError.EXPIRED, `Codex token expired for ${profile.home}. Run \`codex login\`.`);
+    const credentials = readCredentials(codexHome);
+    if (credentials.expired) fail(AuthError.EXPIRED, `Codex token expired for ${codexHome.home}. Run \`codex login\`.`);
     const data = await fetchUsageResponse(credentials);
-    const [resetCredits, sessionUsage] = await Promise.all([
-      fetchResetCredits(credentials),
-      scanModels ? scanSessionUsage(profile.home) : Promise.resolve(null),
-    ]);
-    return mapSnapshot(profile, credentials, data, resetCredits, sessionUsage);
+    return mapSnapshot(data, await fetchBankedResets(credentials));
   } catch (error) {
-    return mapError(profile, error);
+    return mapError(error);
   }
 }
 
-/** Fetch normalized snapshots for the default profile and each configured profile. Never throws. */
-export async function getSnapshots(configuredHomes: string[] = [], scanModels = false): Promise<UsageSnapshot[]> {
-  return Promise.all(discoverProfiles(configuredHomes).map(profile => getProfileSnapshot(profile, scanModels)));
-}
-
-/** Backwards-compatible single-profile helper. */
+/** Fetch the normalized snapshot for the default Codex home. Never throws. */
 export async function getSnapshot(): Promise<UsageSnapshot> {
-  const snapshot = (await getSnapshots())[0];
-  if (!snapshot) throw new Error('Default Codex profile was not discovered');
-  return snapshot;
+  return getCodexSnapshot({ home: defaultCodexHome() });
 }
