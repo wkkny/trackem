@@ -10,6 +10,10 @@ afterEach(() => {
 });
 
 describe('config', () => {
+  it('keeps optional file scanning, startup, and study off unless explicitly enabled', () => {
+    expect(normalizeConfig({ scanLocalModels: 'true', launchAtLogin: 1, localResearch: 'yes' })).toMatchObject({ scanLocalModels: false, launchAtLogin: false, localResearch: false });
+    expect(normalizeConfig({ codexEnabled: false, claudeEnabled: false })).toMatchObject({ codexEnabled: false, claudeEnabled: false });
+  });
   it('normalizes duplicates, limits days, and rejects invalid values', () => {
     const result = normalizeConfig({
       codexProfileHomes: ['/tmp/work', '/tmp/work', '', 42],
@@ -27,7 +31,7 @@ describe('config', () => {
     const file = path.join(directory, 'nested', 'config.json');
     const saved = saveConfig(file, { codexProfileHomes: ['/tmp/a'], resetExpiryDays: 4 });
     expect(loadConfig(file)).toEqual(saved);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
   it('uses defaults for missing or malformed files', () => {

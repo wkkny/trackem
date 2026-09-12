@@ -6,18 +6,32 @@ export interface TrackemConfig {
   codexProfileHomes: string[];
   notifyOnResetExpiry: boolean;
   resetExpiryDays: number;
+  codexEnabled: boolean;
+  claudeEnabled: boolean;
+  claudeHome: string;
+  scanLocalModels: boolean;
+  launchAtLogin: boolean;
+  notifyOnLowUsage: boolean;
+  localResearch: boolean;
 }
 
 export const DEFAULT_CONFIG: TrackemConfig = {
   codexProfileHomes: [],
   notifyOnResetExpiry: true,
   resetExpiryDays: 7,
+  codexEnabled: true,
+  claudeEnabled: true,
+  claudeHome: '',
+  scanLocalModels: false,
+  launchAtLogin: false,
+  notifyOnLowUsage: true,
+  localResearch: false,
 };
 
 export function expandHome(value: string): string {
   const trimmed = value.trim();
   if (trimmed === '~') return os.homedir();
-  if (trimmed.startsWith(`~${path.sep}`)) return path.join(os.homedir(), trimmed.slice(2));
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) return path.join(os.homedir(), trimmed.slice(2));
   return path.resolve(trimmed);
 }
 
@@ -29,6 +43,13 @@ export function normalizeConfig(value: unknown): TrackemConfig {
     .map(expandHome);
 
   return {
+    codexEnabled: typeof input.codexEnabled === 'boolean' ? input.codexEnabled : true,
+    claudeEnabled: typeof input.claudeEnabled === 'boolean' ? input.claudeEnabled : true,
+    claudeHome: typeof input.claudeHome === 'string' && input.claudeHome.trim() ? expandHome(input.claudeHome) : '',
+    scanLocalModels: input.scanLocalModels === true,
+    launchAtLogin: input.launchAtLogin === true,
+    notifyOnLowUsage: typeof input.notifyOnLowUsage === 'boolean' ? input.notifyOnLowUsage : true,
+    localResearch: input.localResearch === true,
     codexProfileHomes: [...new Set(homes)].slice(0, 20),
     notifyOnResetExpiry:
       typeof input.notifyOnResetExpiry === 'boolean'

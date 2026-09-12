@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { scanSessionUsage, type SessionUsageSummary } from './sessions';
+import type { Forecast } from '../../forecast';
 
 const USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 const RESET_CREDITS_URL = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits';
@@ -22,11 +23,12 @@ export interface UsageWindow {
   usedPercent: number;
   resetAt: string | null;
   windowSeconds: number | null;
+  forecast?: Forecast;
 }
 
 export interface UsageSnapshot {
   ok: boolean;
-  providerId: 'codex';
+  providerId: 'codex' | 'claude';
   account: {
     id: string;
     label: string;
@@ -42,7 +44,7 @@ export interface UsageSnapshot {
   topModel: string | null;
   /** Rate-limit reset credits ("reserve") from /wham/rate-limit-reset-credits. */
   reserve: {
-    available: number;
+    available: number | null;
     nextExpiresAt: string | null;
     expirations: string[];
     balance: number | null;
@@ -183,14 +185,10 @@ function buildRequestHeaders(credentials: CodexCredentials): Record<string, stri
 }
 
 async function request(credentials: CodexCredentials, url: string, timeout = FETCH_TIMEOUT_MS): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    return await fetch(url, { headers: buildRequestHeaders(credentials), signal: controller.signal });
-  } catch (error) {
-    fail(AuthError.NETWORK, `Network error contacting Codex: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    clearTimeout(timer);
+    return await fetch(url, { headers: buildRequestHeaders(credentials), signal: AbortSignal.timeout(timeout), redirect: 'error' });
+  } catch {
+    fail(AuthError.NETWORK, 'Could not reach Codex. Check your connection and try again.');
   }
 }
 
@@ -200,27 +198,32 @@ async function fetchUsageResponse(credentials: CodexCredentials): Promise<WhamUs
     fail(AuthError.EXPIRED, 'Codex token expired or invalid. Run `codex login` to re-authenticate.');
   }
   if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    fail(AuthError.API, `Codex usage API error ${response.status}: ${body.slice(0, 200)}`);
+    fail(AuthError.API, `Codex usage API returned HTTP ${response.status}. Try again later.`);
   }
+  let data: WhamUsageResponse;
   try {
-    return (await response.json()) as WhamUsageResponse;
+    data = await response.json() as WhamUsageResponse;
   } catch {
     fail(AuthError.PARSE, 'Codex usage API returned a non-JSON response.');
   }
+  if (!data || typeof data !== 'object' || !data.rate_limit ||
+      (!mapWindow(data.rate_limit.primary_window, 'fiveHour') && !mapWindow(data.rate_limit.secondary_window, 'weekly'))) {
+    fail(AuthError.PARSE, 'Codex did not provide supported quota windows.');
+  }
+  return data;
 }
 
 export function mapWindow(window: WhamWindow | undefined, id: UsageWindow['id']): UsageWindow | null {
-  if (!window || typeof window.used_percent !== 'number' || !Number.isFinite(window.used_percent)) return null;
+  if (!window || typeof window.used_percent !== 'number' || !Number.isFinite(window.used_percent) || window.used_percent < 0 || window.used_percent > 100) return null;
   return {
     id,
-    usedPercent: Math.min(100, Math.max(0, window.used_percent)),
+    usedPercent: window.used_percent,
     resetAt:
-      typeof window.reset_at === 'number' && Number.isFinite(window.reset_at)
+      typeof window.reset_at === 'number' && Number.isFinite(window.reset_at) && Math.abs(window.reset_at) < 8.64e12
         ? new Date(window.reset_at * 1000).toISOString()
         : null,
     windowSeconds:
-      typeof window.limit_window_seconds === 'number' && Number.isFinite(window.limit_window_seconds)
+       typeof window.limit_window_seconds === 'number' && Number.isFinite(window.limit_window_seconds) && window.limit_window_seconds > 0
         ? window.limit_window_seconds
         : null,
   };
@@ -244,7 +247,7 @@ function mapSnapshot(
   const reserve = resetCredits
     ? { ...resetCredits, balance, unit: 'credits' }
     : balance !== null
-      ? { available: 0, nextExpiresAt: null, expirations: [], balance, unit: 'credits' }
+      ? { available: null, nextExpiresAt: null, expirations: [], balance, unit: 'credits' }
       : null;
 
   return {
@@ -285,6 +288,8 @@ async function fetchResetCredits(credentials: CodexCredentials): Promise<ResetCr
       available_count?: number;
       credits?: Array<{ status?: string; expires_at?: string; redeemed_at?: string | null }>;
     };
+    if (!payload || (!Array.isArray(payload.credits) && typeof payload.available_count !== 'number')) return null;
+    if (payload.available_count !== undefined && (!Number.isInteger(payload.available_count) || payload.available_count < 0)) return null;
     const now = Date.now();
     const stillAvailable = (payload.credits ?? []).filter((credit) => {
       if (credit.redeemed_at || credit.status === 'expired') return false;
@@ -306,14 +311,14 @@ async function fetchResetCredits(credentials: CodexCredentials): Promise<ResetCr
   }
 }
 
-async function getProfileSnapshot(profile: CodexProfile): Promise<UsageSnapshot> {
+async function getProfileSnapshot(profile: CodexProfile, scanModels: boolean): Promise<UsageSnapshot> {
   try {
     const credentials = readCredentials(profile);
     if (credentials.expired) fail(AuthError.EXPIRED, `Codex token expired for ${profile.home}. Run \`codex login\`.`);
     const data = await fetchUsageResponse(credentials);
     const [resetCredits, sessionUsage] = await Promise.all([
       fetchResetCredits(credentials),
-      scanSessionUsage(profile.home),
+      scanModels ? scanSessionUsage(profile.home) : Promise.resolve(null),
     ]);
     return mapSnapshot(profile, credentials, data, resetCredits, sessionUsage);
   } catch (error) {
@@ -322,8 +327,8 @@ async function getProfileSnapshot(profile: CodexProfile): Promise<UsageSnapshot>
 }
 
 /** Fetch normalized snapshots for the default profile and each configured profile. Never throws. */
-export async function getSnapshots(configuredHomes: string[] = []): Promise<UsageSnapshot[]> {
-  return Promise.all(discoverProfiles(configuredHomes).map(getProfileSnapshot));
+export async function getSnapshots(configuredHomes: string[] = [], scanModels = false): Promise<UsageSnapshot[]> {
+  return Promise.all(discoverProfiles(configuredHomes).map(profile => getProfileSnapshot(profile, scanModels)));
 }
 
 /** Backwards-compatible single-profile helper. */

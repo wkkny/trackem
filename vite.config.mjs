@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 
 export default defineConfig({
+  // Installed Electron builds load index.html via file:, not a web-server root.
+  base: './',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
