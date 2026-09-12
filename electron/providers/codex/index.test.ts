@@ -72,6 +72,19 @@ describe('Codex profiles', () => {
     expect(snapshots[2]).toMatchObject({ ok: false, error: { kind: 'missing-credential' } });
     expect(fetch).toHaveBeenCalledTimes(4);
   });
+
+  it('distinguishes valid JSON without quota windows from a non-JSON response', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-invalid-usage-'));
+    directories.push(home);
+    process.env.CODEX_HOME = home;
+    writeAuth(home, 'personal@example.com', 'account-one');
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('{}'));
+    expect((await getSnapshots())[0].error?.message).toBe('Codex did not provide supported quota windows.');
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('not json'));
+    expect((await getSnapshots())[0].error?.message).toBe('Codex usage API returned a non-JSON response.');
+  });
 });
 
 describe('Codex normalization', () => {

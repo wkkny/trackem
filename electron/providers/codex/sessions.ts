@@ -15,6 +15,24 @@ const MAX_SCAN_BYTES = 32 * 1024 * 1024;
 const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const cache = new Map<string, { at: number; result: SessionUsageSummary }>();
 
+export async function readBoundedFile(file: string, maxBytes: number): Promise<string> {
+  const handle = await fsPromises.open(file, 'r');
+  const chunks: Buffer[] = [];
+  let bytesRead = 0;
+  try {
+    while (bytesRead < maxBytes) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes - bytesRead));
+      const result = await handle.read(buffer, 0, buffer.length, null);
+      if (result.bytesRead === 0) break;
+      chunks.push(buffer.subarray(0, result.bytesRead));
+      bytesRead += result.bytesRead;
+    }
+  } finally {
+    await handle.close();
+  }
+  return Buffer.concat(chunks, bytesRead).toString('utf8');
+}
+
 async function listSessionFiles(home: string): Promise<string[]> {
   const roots = [path.join(home, 'archived_sessions'), path.join(home, 'sessions')];
   const files: string[] = [];
@@ -118,7 +136,7 @@ export async function scanSessionUsage(
       try {
         const stat = await fsPromises.stat(file);
         if (stat.size > MAX_FILE_BYTES || scannedBytes + stat.size > MAX_SCAN_BYTES) continue;
-        const content = await fsPromises.readFile(file, 'utf8');
+        const content = await readBoundedFile(file, Math.min(MAX_FILE_BYTES, MAX_SCAN_BYTES - scannedBytes));
         scannedBytes += Buffer.byteLength(content);
         if (scannedBytes > MAX_SCAN_BYTES) break;
         tallyContent(content, byModel);

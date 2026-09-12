@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { scanSessionUsage } from './sessions';
+import { readBoundedFile, scanSessionUsage } from './sessions';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -10,6 +10,16 @@ afterEach(() => {
 });
 
 describe('scanSessionUsage', () => {
+  it('caps bytes read even when the file exceeds the requested limit', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-session-limit-'));
+    directories.push(home);
+    const file = path.join(home, 'growing.jsonl');
+    fs.writeFileSync(file, Buffer.alloc(128 * 1024, 'x'));
+
+    const content = await readBoundedFile(file, 64 * 1024);
+
+    expect(Buffer.byteLength(content)).toBe(64 * 1024);
+  });
   it('counts cumulative deltas once and ignores model text inside prompts', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-session-deltas-'));
     directories.push(home);

@@ -74,6 +74,7 @@ describe('desktop lifecycle', () => {
     expect(window.setBounds).toHaveBeenCalledWith({ x: 1500, y: 472, width: 420, height: 560 });
     expect(state.handlers.get('usage:get')?.().view).toBe('popover');
     expect(window.visible).toBe(true);
+    expect(state.getCodex).toHaveBeenCalledTimes(1);
     window.emit('blur'); expect(window.visible).toBe(false);
     state.events.get('window:dashboard')?.();
     expect(state.handlers.get('usage:get')?.().view).toBe('dashboard');
@@ -86,13 +87,19 @@ describe('desktop lifecycle', () => {
     expect(state.notifications).toHaveLength(1);
   });
   it('coalesces concurrent manual refreshes', async () => {
-    await vi.advanceTimersByTimeAsync(30_000);
     let resolve!: (value: UsageSnapshot[]) => void;
     state.getCodex.mockReturnValue(new Promise<UsageSnapshot[]>(done => { resolve = done; }));
     const refresh = state.handlers.get('usage:refresh')!;
     const first = refresh(); const second = refresh();
     expect(state.getCodex).toHaveBeenCalledTimes(2);
     resolve([snapshot()]); await Promise.all([first, second]);
+    expect(state.getCodex).toHaveBeenCalledTimes(2);
+  });
+  it('lets the tray menu refresh immediately after another attempt', async () => {
+    state.trays[0].emit('right-click');
+    const menu = state.trays[0].popUpContextMenu.mock.calls[0][0];
+    menu[1].click();
+    await settle();
     expect(state.getCodex).toHaveBeenCalledTimes(2);
   });
   it('stops polling while suspended and refreshes after resume', async () => {

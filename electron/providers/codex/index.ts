@@ -200,16 +200,17 @@ async function fetchUsageResponse(credentials: CodexCredentials): Promise<WhamUs
   if (!response.ok) {
     fail(AuthError.API, `Codex usage API returned HTTP ${response.status}. Try again later.`);
   }
+  let data: WhamUsageResponse;
   try {
-    const data = await response.json() as WhamUsageResponse;
-    if (!data || typeof data !== 'object' || !data.rate_limit ||
-        (!mapWindow(data.rate_limit.primary_window, 'fiveHour') && !mapWindow(data.rate_limit.secondary_window, 'weekly'))) {
-      fail(AuthError.PARSE, 'Codex did not provide supported quota windows.');
-    }
-    return data;
+    data = await response.json() as WhamUsageResponse;
   } catch {
     fail(AuthError.PARSE, 'Codex usage API returned a non-JSON response.');
   }
+  if (!data || typeof data !== 'object' || !data.rate_limit ||
+      (!mapWindow(data.rate_limit.primary_window, 'fiveHour') && !mapWindow(data.rate_limit.secondary_window, 'weekly'))) {
+    fail(AuthError.PARSE, 'Codex did not provide supported quota windows.');
+  }
+  return data;
 }
 
 export function mapWindow(window: WhamWindow | undefined, id: UsageWindow['id']): UsageWindow | null {

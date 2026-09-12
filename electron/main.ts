@@ -198,7 +198,7 @@ function createTray(): void {
   tray.on('click', () => { if (mainWindow?.isVisible() && view === 'popover') mainWindow.hide(); else showPopover(); });
   tray.on('right-click', () => tray?.popUpContextMenu(Menu.buildFromTemplate([
     { label: 'Open dashboard', click: showDashboard },
-    { label: 'Refresh usage', click: () => void refreshUsage() },
+    { label: 'Refresh usage', click: () => void refreshUsage(true) },
     { type: 'separator' }, { label: 'Quit Trackem', click: () => app.quit() },
   ])));
 }
@@ -217,7 +217,7 @@ app.on('second-instance', showDashboard);
 app.on('activate', () => { if (mainWindow) showDashboard(); });
 
 ipcMain.handle('usage:get', () => payload());
-ipcMain.handle('usage:refresh', () => refreshUsage());
+ipcMain.handle('usage:refresh', () => refreshUsage(true));
 ipcMain.handle('config:get', configPayload);
 ipcMain.handle('config:set', async (_event, nextConfig: unknown) => {
   await inFlight;
