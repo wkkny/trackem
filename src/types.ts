@@ -1,73 +1,31 @@
-export interface UsageWindow {
-  id: 'fiveHour' | 'weekly';
-  usedPercent: number;
-  resetAt: string | null;
-  windowSeconds: number | null;
-}
-
-export interface UsageSnapshot {
-  ok: boolean;
-  providerId: 'codex';
-  account: {
-    id: string;
-    label: string;
-    email: string | null;
-    home: string;
-    isDefault: boolean;
-  };
-  plan: string | null;
-  source: string;
-  updatedAt: string;
-  windows: Partial<Record<'fiveHour' | 'weekly', UsageWindow>>;
-  topModel: string | null;
-  reserve: {
-    available: number;
-    nextExpiresAt: string | null;
-    expirations: string[];
-    balance: number | null;
-    unit: string;
-  } | null;
-  error?: { kind: string; message: string };
-}
-
-export interface DiagnosticEntry {
-  id: string;
-  level: 'info' | 'error';
-  providerId: 'codex' | 'system';
-  accountLabel: string | null;
-  message: string;
-  timestamp: string;
-}
+export type { UsageWindow, UsageSnapshot } from '../electron/providers/codex';
+export type { TrackemConfig } from '../electron/config';
+export type { DiagnosticEntry } from '../electron/main';
+import type { UsageSnapshot } from '../electron/providers/codex';
+import type { TrackemConfig } from '../electron/config';
+import type { DiagnosticEntry } from '../electron/main';
+import type { ResearchReport, ResearchAnswers } from '../electron/research';
 
 export interface UsageSnapshotPayload {
   codex: UsageSnapshot[];
+  claude: UsageSnapshot[];
   diagnostics: DiagnosticEntry[];
+  lastCheckedAt: string | null;
+  view: 'dashboard' | 'popover';
 }
-
-export interface TrackemConfig {
-  codexProfileHomes: string[];
-  notifyOnResetExpiry: boolean;
-  resetExpiryDays: number;
-}
-
-export interface ConfigPayload {
-  config: TrackemConfig;
-  file: string;
-}
-
+export interface ConfigPayload { config: TrackemConfig; file: string; startupSupported: boolean }
 export interface TrackemApi {
   quit(): void;
   minimize(): void;
+  openDashboard(): void;
   getUsage(): Promise<UsageSnapshotPayload>;
   refreshUsage(): Promise<void>;
   getConfig(): Promise<ConfigPayload>;
   setConfig(config: TrackemConfig): Promise<ConfigPayload>;
-  setTrayIcon(dataUrl: string): void;
+  getResearch(): Promise<ResearchReport>;
+  saveResearch(answers: ResearchAnswers): Promise<ResearchReport>;
+  copyResearch(): Promise<void>;
+  clearResearch(): Promise<ResearchReport>;
   onUsageUpdated(callback: (payload: UsageSnapshotPayload) => void): () => void;
 }
-
-declare global {
-  interface Window {
-    trackem: TrackemApi | undefined;
-  }
-}
+declare global { interface Window { trackem: TrackemApi | undefined } }

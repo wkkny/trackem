@@ -81,9 +81,10 @@ describe('Codex normalization', () => {
     expect(isTokenExpired('not-a-jwt', 11_000)).toBe(false);
   });
 
-  it('clamps percentages and rejects non-finite data', () => {
-    expect(mapWindow({ used_percent: 130 }, 'weekly')?.usedPercent).toBe(100);
-    expect(mapWindow({ used_percent: -3 }, 'fiveHour')?.usedPercent).toBe(0);
+  it('rejects invalid percentages instead of displaying invented boundaries', () => {
+    expect(mapWindow({ used_percent: 130 }, 'weekly')).toBeNull();
+    expect(mapWindow({ used_percent: -3 }, 'fiveHour')).toBeNull();
     expect(mapWindow({ used_percent: Number.NaN }, 'weekly')).toBeNull();
+    expect(mapWindow({ used_percent: 40, reset_at: 1e20 }, 'weekly')?.resetAt).toBeNull();
   });
 });
