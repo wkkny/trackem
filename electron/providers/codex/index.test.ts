@@ -40,6 +40,10 @@ function usageResponse(): Response {
   }), { status: 200 });
 }
 
+function usageRequestCount(): number {
+  return vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith('/wham/usage')).length;
+}
+
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
     void input;
@@ -102,7 +106,7 @@ describe('Codex requests', () => {
       ok: false,
       error: { kind: 'authentication-expired' },
     });
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(usageRequestCount()).toBe(1);
   });
 
   it('reports malformed JSON from a successful usage response', async () => {
@@ -115,7 +119,7 @@ describe('Codex requests', () => {
       ok: false,
       error: { kind: 'parse-failure' },
     });
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(usageRequestCount()).toBe(1);
   });
 
   it('retries a transient network failure once and then succeeds', async () => {
@@ -170,6 +174,40 @@ describe('Codex requests', () => {
     expect(await getSnapshot()).toMatchObject({ ok: true, bankedResets: 3 });
   });
 
+  it('starts the reset request while the usage request is pending', async () => {
+    createAuthenticatedHome();
+    let resolveUsage: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (String(input).endsWith('/wham/usage')) {
+        return new Promise<Response>(resolve => {
+          resolveUsage = resolve;
+        });
+      }
+      return Promise.resolve(new Response(JSON.stringify({ available_count: 1 }), { status: 200 }));
+    });
+
+    const snapshotPromise = getSnapshot();
+    await Promise.resolve();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    resolveUsage?.(usageResponse());
+    expect(await snapshotPromise).toMatchObject({ ok: true, bankedResets: 1 });
+  });
+
+  it('excludes credits marked as redeemed without a redeemed timestamp', async () => {
+    createAuthenticatedHome();
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input).endsWith('/wham/usage')) return usageResponse();
+      return new Response(JSON.stringify({
+        credits: [
+          { status: 'redeemed', expires_at: '2999-01-01T00:00:00.000Z', redeemed_at: null },
+          { status: 'available', expires_at: '2999-01-02T00:00:00.000Z', redeemed_at: null },
+        ],
+      }), { status: 200 });
+    });
+
+    expect(await getSnapshot()).toMatchObject({ ok: true, bankedResets: 1 });
+  });
+
   it('retries timed-out requests once and clears both attempt timers', async () => {
     createAuthenticatedHome();
     vi.useFakeTimers();
@@ -179,9 +217,9 @@ describe('Codex requests', () => {
 
     const snapshotPromise = getSnapshot();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(usageRequestCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(250);
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(usageRequestCount()).toBe(2);
     await vi.advanceTimersByTimeAsync(10_000);
     const snapshot = await snapshotPromise;
 
@@ -218,7 +256,7 @@ describe('Codex requests', () => {
       ok: false,
       error: { kind: 'network-failure', message: expect.stringContaining('timed out') },
     });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(usageRequestCount()).toBe(2);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -243,7 +281,7 @@ describe('Codex requests', () => {
     const snapshot = await snapshotPromise;
 
     expect(snapshot.error?.kind).toBe('authentication-expired');
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(usageRequestCount()).toBe(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -280,7 +318,7 @@ describe('Codex requests', () => {
 
     expect(snapshot.error?.message).toContain('HTTP 400');
     expect(snapshot.error?.message).not.toContain(accessToken);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(usageRequestCount()).toBe(1);
   });
 
 });

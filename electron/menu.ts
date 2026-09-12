@@ -28,7 +28,7 @@ export function formatReset(resetAt: string | null, window: UsageWindow['id'], n
 
   const days = Math.floor(seconds / 86_400);
   const hours = Math.floor((seconds % 86_400) / 3_600);
-  if (days === 0) return `${Math.max(1, hours)}h`;
+  if (days === 0) return hours === 0 ? `${Math.ceil(seconds / 60)}m` : `${hours}h`;
   return hours === 0 ? `${days}d` : `${days}d ${hours}h`;
 }
 

@@ -27,7 +27,9 @@ public enum DisplayFormatter {
         if seconds == 0 { return "Now" }
         let days = seconds / 86_400
         let hours = (seconds % 86_400) / 3_600
-        if days == 0 { return "\(max(1, hours))h" }
+        if days == 0 {
+            return hours == 0 ? "\(max(1, Int(ceil(Double(seconds) / 60))))m" : "\(hours)h"
+        }
         return hours == 0 ? "\(days)d" : "\(days)d \(hours)h"
     }
 

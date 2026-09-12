@@ -12,6 +12,7 @@ let tray: Tray | null = null;
 let latestSnapshot: UsageSnapshot | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
 let refreshPromise: Promise<void> | null = null;
+let refreshQueued = false;
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 
 function iconPath(): string {
@@ -54,8 +55,11 @@ function updateTray(): void {
   tray.setToolTip(remaining === null ? 'Trackem: Codex connected' : `Trackem: ${remaining}% left`);
 }
 
-function refreshUsage(): Promise<void> {
-  if (refreshPromise) return refreshPromise;
+function refreshUsage(queueIfBusy = false): Promise<void> {
+  if (refreshPromise) {
+    if (queueIfBusy) refreshQueued = true;
+    return refreshPromise;
+  }
   refreshPromise = getSnapshot()
     .then(snapshot => {
       latestSnapshot = snapshot;
@@ -63,6 +67,10 @@ function refreshUsage(): Promise<void> {
     })
     .finally(() => {
       refreshPromise = null;
+      if (refreshQueued) {
+        refreshQueued = false;
+        void refreshUsage();
+      }
     });
   return refreshPromise;
 }
@@ -79,7 +87,7 @@ function createTray(): void {
 if (hasLock) {
   void app.whenReady().then(() => {
     createTray();
-    powerMonitor.on('resume', () => void refreshUsage());
+    powerMonitor.on('resume', () => void refreshUsage(true));
   });
 }
 

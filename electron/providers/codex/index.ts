@@ -263,7 +263,7 @@ async function fetchBankedResets(credentials: CodexCredentials): Promise<number 
     if (!Array.isArray(payload.credits)) return null;
     const now = Date.now();
     return payload.credits.filter(credit => {
-      if (credit.redeemed_at || credit.status === 'expired') return false;
+      if (credit.redeemed_at || credit.status === 'redeemed' || credit.status === 'expired') return false;
       if (typeof credit.expires_at !== 'string') return true;
       const expiresAt = Date.parse(credit.expires_at);
       return Number.isFinite(expiresAt) && expiresAt > now;
@@ -277,8 +277,11 @@ async function getCodexSnapshot(codexHome: CodexHome): Promise<UsageSnapshot> {
   try {
     const credentials = readCredentials(codexHome);
     if (credentials.expired) fail(AuthError.EXPIRED, `Codex token expired for ${codexHome.home}. Run \`codex login\`.`);
-    const data = await fetchUsageResponse(credentials);
-    return mapSnapshot(data, await fetchBankedResets(credentials));
+    const [data, bankedResets] = await Promise.all([
+      fetchUsageResponse(credentials),
+      fetchBankedResets(credentials),
+    ]);
+    return mapSnapshot(data, bankedResets);
   } catch (error) {
     return mapError(error);
   }

@@ -114,7 +114,10 @@ public struct CodexUsageClient: Sendable {
 
             let now = Date()
             return payload.credits?.filter { credit in
-                guard credit.redeemedAt == nil, credit.status != "expired" else { return false }
+                guard credit.redeemedAt == nil,
+                      credit.status != "redeemed",
+                      credit.status != "expired",
+                      !credit.hasInvalidExpiration else { return false }
                 return credit.expiresAt.map { $0 > now } ?? true
             }.count
         } catch {
@@ -248,6 +251,7 @@ private struct ResetCreditsResponse: Decodable {
 private struct ResetCredit: Decodable {
     let status: String?
     let expiresAt: Date?
+    let hasInvalidExpiration: Bool
     let redeemedAt: Date?
 
     enum CodingKeys: String, CodingKey {
@@ -259,12 +263,27 @@ private struct ResetCredit: Decodable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         status = try values.decodeIfPresent(String.self, forKey: .status)
-        expiresAt = Self.decodeDate(values, key: .expiresAt)
+        let expiration = Self.decodeExpiration(values)
+        expiresAt = expiration.date
+        hasInvalidExpiration = expiration.invalid
         redeemedAt = Self.decodeDate(values, key: .redeemedAt)
+    }
+
+    private static func decodeExpiration(_ values: KeyedDecodingContainer<CodingKeys>) -> (date: Date?, invalid: Bool) {
+        if !values.contains(.expiresAt) || (try? values.decodeNil(forKey: .expiresAt)) == true {
+            return (nil, false)
+        }
+        guard let raw = try? values.decode(String.self, forKey: .expiresAt),
+              let date = parseDate(raw) else { return (nil, true) }
+        return (date, false)
     }
 
     private static func decodeDate(_ values: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Date? {
         guard let raw = try? values.decode(String.self, forKey: key) else { return nil }
+        return parseDate(raw)
+    }
+
+    private static func parseDate(_ raw: String) -> Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return fractional.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)

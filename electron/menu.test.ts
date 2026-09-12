@@ -12,6 +12,7 @@ describe('native tray labels', () => {
     const now = Date.parse('2026-01-01T00:00:00.000Z');
     expect(formatReset('2026-01-01T02:05:00.000Z', 'fiveHour', now)).toBe('2h 5m');
     expect(formatReset('2026-01-04T05:00:00.000Z', 'weekly', now)).toBe('3d 5h');
+    expect(formatReset('2026-01-01T00:30:00.000Z', 'weekly', now)).toBe('30m');
   });
 
   it('includes the plan, quota windows, and banked resets', () => {

@@ -99,4 +99,20 @@ describe('Windows tray lifecycle', () => {
     await settle();
     expect(state.getSnapshot).toHaveBeenCalledTimes(2);
   });
+
+  it('queues a resume refresh when another refresh is running', async () => {
+    let resolveRefresh: ((value: UsageSnapshot) => void) | undefined;
+    state.getSnapshot.mockImplementationOnce(() => new Promise<UsageSnapshot>(resolve => {
+      resolveRefresh = resolve;
+    }));
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(state.getSnapshot).toHaveBeenCalledTimes(2);
+    state.powerEvents.get('resume')?.();
+    expect(state.getSnapshot).toHaveBeenCalledTimes(2);
+
+    resolveRefresh?.(snapshot());
+    await settle();
+    expect(state.getSnapshot).toHaveBeenCalledTimes(3);
+  });
 });
