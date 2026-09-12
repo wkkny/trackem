@@ -223,7 +223,7 @@ function ReserveStat({ reserve }: { reserve: NonNullable<UsageSnapshot['reserve'
   return (
     <p className="text-xs text-muted-foreground">
       Reserves: <span className="font-semibold text-foreground">{reserve.available}</span>
-      {dates.length > 0 && <> · Expires: <span className="font-semibold text-foreground">{dates.join(', ')}</span></>}
+      {dates.length > 0 && <> · Expires in: <span className="font-semibold text-foreground">{dates.join(', ')}</span></>}
     </p>
   );
 }
