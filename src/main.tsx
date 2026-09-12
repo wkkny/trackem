@@ -192,7 +192,8 @@ function App() {
   );
 }
 
-const container = document.getElementById('root')!;
+const container = document.getElementById('root');
+if (!container) throw new Error('Trackem root element is missing');
 const root = (container as unknown as { __trackemRoot?: ReturnType<typeof createRoot> }).__trackemRoot ?? createRoot(container);
 (container as unknown as { __trackemRoot?: ReturnType<typeof createRoot> }).__trackemRoot = root;
 root.render(<App />);

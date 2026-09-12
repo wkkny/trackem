@@ -74,10 +74,11 @@ pnpm dev
 Quality checks:
 
 ```bash
+pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
-# or all three
+# or run every check
 pnpm check
 ```
 
@@ -96,6 +97,7 @@ Windows packaging and tray behavior should be verified on a Windows machine befo
 electron/
   main.ts                 Window, tray, notifications, refresh loop, and IPC
   config.ts               Validated, private application preferences
+  contracts.ts            Main, preload, and renderer IPC contracts
   preload.ts              Narrow contextBridge API
   providers/codex/        OAuth usage adapter and local session scanner
   providers/claude/       Claude Code credential reader and OAuth usage adapter

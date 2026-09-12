@@ -19,7 +19,7 @@ describe('observed usage forecasts', () => {
   });
   it('discards history across quota resets and provider corrections', () => {
     const reset = samples([40, 50, 60]);
-    reset[2].resetAt = new Date(now + 5 * 60 * 60_000).toISOString();
+    reset[2]!.resetAt = new Date(now + 5 * 60 * 60_000).toISOString();
     expect(forecastUsage(reset, now).status).toBe('collecting');
     expect(forecastUsage(samples([80, 90, 20]), now).status).toBe('collecting');
   });
@@ -31,7 +31,7 @@ describe('observed usage forecasts', () => {
   });
   it('requires new observations after a long offline gap', () => {
     const data = samples([40, 50, 60]);
-    data[0].at -= 60 * 60_000; data[1].at -= 60 * 60_000;
+    data[0]!.at -= 60 * 60_000; data[1]!.at -= 60 * 60_000;
     expect(forecastUsage(data, now).status).toBe('collecting');
   });
   it('reports exhaustion without projecting zero minutes from a fake rate', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ResearchAnswers, ResearchReport } from '../../electron/research';
 import { Button } from '@/components/ui/button';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
@@ -9,8 +9,11 @@ export function ResearchPage({ enabled, openSettings }: { enabled: boolean; open
   const [answers, setAnswers] = useState<ResearchAnswers | null>(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const apply = (next: ResearchReport) => { setReport(next); setAnswers(next.answers); };
-  useEffect(() => { void window.trackem?.getResearch().then(apply).catch(() => setMessage('Could not read local study data.')); }, [enabled]);
+  const apply = useCallback((next: ResearchReport) => { setReport(next); setAnswers(next.answers); }, []);
+  useEffect(() => {
+    if (!enabled) return;
+    void window.trackem?.getResearch().then(apply).catch(() => setMessage('Could not read local study data.'));
+  }, [apply, enabled]);
   const run = async (action: 'save' | 'copy' | 'clear') => {
     if (!window.trackem || !answers) return;
     setBusy(true); setMessage('');
@@ -31,7 +34,7 @@ export function ResearchPage({ enabled, openSettings }: { enabled: boolean; open
         <Field><FieldLabel htmlFor="would-pay">What would you pay monthly for Trackem?</FieldLabel><NativeSelect id="would-pay" value={answers.wouldPay} disabled={busy} onChange={e => setAnswers({ ...answers, wouldPay: e.target.value as ResearchAnswers['wouldPay'] })}><NativeSelectOption value="unanswered">Prefer not to answer</NativeSelectOption><NativeSelectOption value="no">I would not pay</NativeSelectOption><NativeSelectOption value="maybe">Unsure</NativeSelectOption><NativeSelectOption value="yes-3">US$3 per month</NativeSelectOption><NativeSelectOption value="yes-5">US$5 per month</NativeSelectOption><NativeSelectOption value="yes-10">US$10 per month</NativeSelectOption></NativeSelect></Field>
       </FieldGroup>
       <Button className="self-start" disabled={busy} onClick={() => void run('save')}>Save answers locally</Button>
-      {report && <section className="flex flex-col gap-3"><h3 className="font-bold">Report preview</h3><p className="text-sm text-muted-foreground">{report.opens} opens on {report.activeDays.length} days. Day 0 is the first day of the study. Save edited answers to update this preview.</p><pre className="overflow-auto rounded-lg border p-4 text-xs" tabIndex={0}>{JSON.stringify(report, null, 2)}</pre><div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy} onClick={() => void run('copy')}>Copy this report</Button><Button variant="outline" disabled={busy} onClick={() => void run('clear')}>Delete study data</Button></div></section>}
+      {report && <section className="flex flex-col gap-3"><h3 className="font-bold">Report preview</h3><p className="text-sm text-muted-foreground">{report.opens} opens on {report.activeDays.length} days. Day 0 is the first day of the study. Save edited answers to update this preview.</p><pre className="overflow-auto rounded-lg border p-4 text-xs">{JSON.stringify(report, null, 2)}</pre><div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy} onClick={() => void run('copy')}>Copy this report</Button><Button variant="outline" disabled={busy} onClick={() => void run('clear')}>Delete study data</Button></div></section>}
     </>}
     <p role="status" className="text-sm">{message}</p>
   </div>;

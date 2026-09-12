@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { UsageSnapshot } from './providers/codex';
 import { DEFAULT_CONFIG } from './config';
 
@@ -15,9 +17,9 @@ vi.mock('electron', async () => {
   class Window extends EventEmitter {
     visible = false;
     options: any;
-    webContents = Object.assign(new EventEmitter(), { send: vi.fn(), setWindowOpenHandler: vi.fn(), session: { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() } });
+    webContents = Object.assign(new EventEmitter(), { send: vi.fn(), getURL: () => pathToFileURL(path.join(__dirname, '../../dist/index.html')).href, setWindowOpenHandler: vi.fn(), session: { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() } });
     constructor(options: any) { super(); this.options = options; state.windows.push(this); }
-    loadFile = vi.fn(); loadURL = vi.fn(); isDestroyed = () => false;
+    loadFile = vi.fn().mockResolvedValue(undefined); loadURL = vi.fn().mockResolvedValue(undefined); isDestroyed = () => false;
     show = vi.fn(() => { this.visible = true; }); hide = vi.fn(() => { this.visible = false; });
     focus = vi.fn(); isVisible = () => this.visible;
     setAlwaysOnTop = vi.fn(); setResizable = vi.fn(); setMinimumSize = vi.fn(); setSize = vi.fn(); setBounds = vi.fn(); center = vi.fn();
@@ -38,16 +40,22 @@ vi.mock('electron', async () => {
     powerMonitor: { on: (key: string, callback: () => void) => state.power.set(key, callback) },
     screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1040 } }) },
     Menu: { buildFromTemplate: (template: any) => template },
-    nativeImage: { createFromBitmap: () => ({ setTemplateImage: vi.fn() }) }, clipboard: { writeText: vi.fn() },
+    nativeImage: {
+      createFromPath: () => ({ isEmpty: () => false, resize: vi.fn(), setTemplateImage: vi.fn() }),
+      createEmpty: () => ({ isEmpty: () => true, resize: vi.fn(), setTemplateImage: vi.fn() }),
+    },
+    clipboard: { writeText: vi.fn() },
   };
 });
 
 function snapshot(): UsageSnapshot {
   return { ok: true, providerId: 'codex', account: { id: 'test', label: 'private@example.com', email: null, home: '/test', isDefault: true }, plan: 'plus', source: '/test/auth.json', updatedAt: new Date().toISOString(), windows: { fiveHour: { id: 'fiveHour', usedPercent: 95, resetAt: new Date(Date.now() + 3600_000).toISOString(), windowSeconds: 18_000 } }, reserve: null, topModel: null };
 }
+function ipcEvent() { return { sender: state.windows[0].webContents }; }
 async function settle() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
 beforeEach(async () => {
   vi.resetModules(); vi.useFakeTimers();
+  Object.defineProperty(process, 'resourcesPath', { value: path.join(__dirname, 'resources'), configurable: true });
   state.windows.length = 0; state.trays.length = 0; state.notifications.length = 0;
   state.handlers.clear(); state.events.clear(); state.power.clear(); state.studyOpen.mockClear();
   state.getCodex.mockReset().mockResolvedValue([snapshot()]);
@@ -72,12 +80,12 @@ describe('desktop lifecycle', () => {
     expect(window.options.webPreferences).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: true });
     state.trays[0].emit('click');
     expect(window.setBounds).toHaveBeenCalledWith({ x: 1500, y: 472, width: 420, height: 560 });
-    expect(state.handlers.get('usage:get')?.().view).toBe('popover');
+    expect(state.handlers.get('usage:get')?.(ipcEvent()).view).toBe('popover');
     expect(window.visible).toBe(true);
     expect(state.getCodex).toHaveBeenCalledTimes(1);
     window.emit('blur'); expect(window.visible).toBe(false);
-    state.events.get('window:dashboard')?.();
-    expect(state.handlers.get('usage:get')?.().view).toBe('dashboard');
+    state.events.get('window:dashboard')?.(ipcEvent());
+    expect(state.handlers.get('usage:get')?.(ipcEvent()).view).toBe('dashboard');
     expect(state.windows).toHaveLength(1);
   });
   it('deduplicates warnings within a reset window and omits account identity', async () => {
@@ -90,7 +98,7 @@ describe('desktop lifecycle', () => {
     let resolve!: (value: UsageSnapshot[]) => void;
     state.getCodex.mockReturnValue(new Promise<UsageSnapshot[]>(done => { resolve = done; }));
     const refresh = state.handlers.get('usage:refresh')!;
-    const first = refresh(); const second = refresh();
+    const first = refresh(ipcEvent()); const second = refresh(ipcEvent());
     expect(state.getCodex).toHaveBeenCalledTimes(2);
     resolve([snapshot()]); await Promise.all([first, second]);
     expect(state.getCodex).toHaveBeenCalledTimes(2);
@@ -110,8 +118,12 @@ describe('desktop lifecycle', () => {
     expect(state.getCodex).toHaveBeenCalledTimes(2);
   });
   it('stops reading disabled providers and clears their displayed data', async () => {
-    await state.handlers.get('config:set')!(null, { ...DEFAULT_CONFIG, codexEnabled: false, claudeEnabled: false });
+    await state.handlers.get('config:set')!(ipcEvent(), { ...DEFAULT_CONFIG, codexEnabled: false, claudeEnabled: false });
     expect(state.getCodex).toHaveBeenCalledTimes(1); expect(state.getClaude).toHaveBeenCalledTimes(1);
-    expect(state.handlers.get('usage:get')!()).toMatchObject({ codex: [], claude: [] });
+    expect(state.handlers.get('usage:get')!(ipcEvent())).toMatchObject({ codex: [], claude: [] });
+  });
+
+  it('rejects IPC from an untrusted renderer', () => {
+    expect(() => state.handlers.get('usage:get')?.({ sender: { getURL: () => 'https://example.com' } })).toThrow('untrusted renderer');
   });
 });

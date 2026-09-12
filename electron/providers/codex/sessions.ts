@@ -1,4 +1,5 @@
 import * as fsPromises from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -41,7 +42,7 @@ async function listSessionFiles(home: string): Promise<string[]> {
 
   async function walk(dir: string, depth: number): Promise<void> {
     if (depth > 4) return;
-    let entries;
+    let entries: Dirent[];
     try {
       entries = await fsPromises.readdir(dir, { withFileTypes: true });
     } catch {
@@ -79,6 +80,36 @@ interface ModelTally {
   turns: number;
 }
 
+type JsonObject = Record<string, unknown>;
+
+function asObject(value: unknown): JsonObject | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as JsonObject
+    : null;
+}
+
+function asTokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function usageTotal(value: unknown): number | null {
+  const usage = asObject(value);
+  if (!usage) return null;
+  const total = asTokenCount(usage.total_tokens);
+  if (total !== null) return total;
+  const input = asTokenCount(usage.input_tokens);
+  const output = asTokenCount(usage.output_tokens);
+  return input === null && output === null ? null : (input ?? 0) + (output ?? 0);
+}
+
+function readModel(...sources: Array<JsonObject | null>): string | null {
+  for (const source of sources) {
+    const model = source?.model_name ?? source?.model;
+    if (typeof model === 'string' && model.length > 0) return model;
+  }
+  return null;
+}
+
 /**
  * Attribute tokens per model from native Codex session logs.
  * `turn_context` lines carry the active model; `event_msg`/`token_count` lines
@@ -86,38 +117,48 @@ interface ModelTally {
  */
 function tallyContent(content: string, byModel: Map<string, ModelTally>): void {
   let currentModel: string | null = null;
-  let previousTotal = 0;
+  let previousTotal: number | null = null;
+  let incrementalSinceTotal = 0;
   for (const line of content.split('\n')) {
-    // Inspect parsed event types, never matching model names inside prompt text.
-    let event;
-    try { event = JSON.parse(line); } catch { continue; }
-    if (!event || typeof event !== 'object') continue;
+    let event: JsonObject | null;
+    try { event = asObject(JSON.parse(line)); } catch { continue; }
+    if (!event) continue;
+    const payload = asObject(event.payload);
     if (event.type === 'turn_context') {
-      const model = event.payload?.model ?? event.model;
-      if (typeof model === 'string') {
-        currentModel = model;
-        const tally = byModel.get(model) ?? { tokens: 0, turns: 0 };
+      currentModel = readModel(payload, event) ?? currentModel;
+      if (currentModel) {
+        const tally = byModel.get(currentModel) ?? { tokens: 0, turns: 0 };
         tally.turns += 1;
-        byModel.set(model, tally);
+        byModel.set(currentModel, tally);
       }
       continue;
     }
 
-    if (event.type === 'event_msg' && event.payload?.type === 'token_count') {
-      const info = event.payload.info;
-      const model = info?.model ?? info?.model_name ?? currentModel;
-      const usage = info?.total_token_usage;
-      const total = usage ? Number(usage.input_tokens ?? 0) + Number(usage.output_tokens ?? 0) : info?.total_token_count;
-      if (typeof total !== 'number' || !Number.isFinite(total) || total < 0) continue;
-      // Native counters are cumulative. Repeated events must not double-count tokens.
-      const tokens = total >= previousTotal ? total - previousTotal : total;
-      previousTotal = total;
-      if (typeof model !== 'string') continue;
+    if (event.type !== 'event_msg' || payload?.type !== 'token_count') continue;
+    const info = asObject(payload.info);
+    if (!info) continue;
 
-      const tally = byModel.get(model) ?? { tokens: 0, turns: 0 };
-      tally.tokens += tokens;
-      byModel.set(model, tally);
+    const cumulativeTotal = usageTotal(info.total_token_usage) ?? asTokenCount(info.total_token_count);
+    const incrementalTotal = usageTotal(info.last_token_usage);
+    let tokens = 0;
+    if (incrementalTotal !== null) {
+      tokens = incrementalTotal;
+      if (cumulativeTotal === null) incrementalSinceTotal += incrementalTotal;
+    } else if (cumulativeTotal !== null) {
+      const counterReset = previousTotal !== null && cumulativeTotal < previousTotal;
+      const cumulativeDelta = previousTotal === null || counterReset ? cumulativeTotal : cumulativeTotal - previousTotal;
+      tokens = counterReset ? cumulativeDelta : Math.max(0, cumulativeDelta - incrementalSinceTotal);
     }
+    if (cumulativeTotal !== null) {
+      previousTotal = cumulativeTotal;
+      incrementalSinceTotal = 0;
+    }
+
+    const model = readModel(info, payload, event) ?? currentModel;
+    if (!model || tokens <= 0) continue;
+    const tally = byModel.get(model) ?? { tokens: 0, turns: 0 };
+    tally.tokens += tokens;
+    byModel.set(model, tally);
   }
 }
 
@@ -156,7 +197,10 @@ export async function scanSessionUsage(
   const tokensByModel: Record<string, number> = {};
   for (const [model, tally] of byModel) tokensByModel[model] = tally.tokens;
   const result = { topModel, tokensByModel, scannedFiles };
-  if (cache.size >= 21) cache.delete(cache.keys().next().value!);
+  if (cache.size >= 21) {
+    const oldest = cache.keys().next().value;
+    if (oldest) cache.delete(oldest);
+  }
   cache.set(home, { at: Date.now(), result });
   return result;
 }

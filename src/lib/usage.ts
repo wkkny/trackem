@@ -2,7 +2,6 @@ export interface PaceMetrics {
   expected: number;
   reserve: number;
   willLast: boolean;
-  multiplier: number | null;
   etaSeconds: number | null;
 }
 
@@ -22,14 +21,12 @@ export function computePace(
   const actual = Math.min(Math.max(usedPercent, 0), 100);
   const remaining = 100 - actual;
   const burnPerSecond = actual / elapsed;
-  const projectedRemaining = burnPerSecond > 0 ? burnPerSecond * timeUntil : 0;
   const willLast = burnPerSecond === 0 || remaining / burnPerSecond >= timeUntil;
 
   return {
     expected,
     reserve: Math.round(expected - actual),
     willLast,
-    multiplier: projectedRemaining > 0 && remaining > 0 ? remaining / projectedRemaining : null,
     etaSeconds: !willLast && burnPerSecond > 0 ? remaining / burnPerSecond : null,
   };
 }

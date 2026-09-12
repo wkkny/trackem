@@ -17,7 +17,9 @@ export function forecastUsage(samples: Observation[], now = Date.now()): Forecas
   let recent = samples.filter(s => s.resetAt === last.resetAt && s.at >= now - 2 * 60 * 60_000 && s.at <= now);
   // A correction, a usage drop, or a long offline gap starts a new observation period.
   for (let i = recent.length - 1; i > 0; i--) {
-    if (recent[i].used < recent[i - 1].used || recent[i].at - recent[i - 1].at > 15 * 60_000) {
+    const current = recent[i];
+    const previous = recent[i - 1];
+    if (current && previous && (current.used < previous.used || current.at - previous.at > 15 * 60_000)) {
       recent = recent.slice(i);
       break;
     }

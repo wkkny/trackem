@@ -51,4 +51,30 @@ describe('scanSessionUsage', () => {
     expect(result.tokensByModel).toEqual({ 'gpt-5.6-sol': 150, 'gpt-5.3-codex': 40 });
     expect(result.topModel).toBe('gpt-5.6-sol');
   });
+
+  it('reconciles incremental events with cumulative totals and counter resets', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-session-mixed-'));
+    directories.push(home);
+    fs.mkdirSync(path.join(home, 'sessions'));
+    fs.writeFileSync(path.join(home, 'sessions', 'mixed.jsonl'), [
+      { type: 'turn_context', payload: { model: 'model-a' } },
+      { type: 'event_msg', payload: { type: 'token_count', info: { total_token_count: 100 } } },
+      { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { total_tokens: 20 } } } },
+      { type: 'event_msg', payload: { type: 'token_count', info: { total_token_count: 150 } } },
+      { type: 'turn_context', payload: { model: 'model-b' } },
+      { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { total_tokens: 10 }, total_token_count: 160 } } },
+      { type: 'event_msg', payload: { type: 'token_count', info: { total_token_count: 5 } } },
+      'malformed JSONL',
+    ].map(event => typeof event === 'string' ? event : JSON.stringify(event)).join('\n'));
+
+    const result = await scanSessionUsage(home);
+    expect(result.tokensByModel).toEqual({ 'model-a': 150, 'model-b': 15 });
+    expect(result.topModel).toBe('model-a');
+  });
+
+  it('returns an empty summary when session directories are missing', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trackem-session-empty-'));
+    directories.push(home);
+    await expect(scanSessionUsage(home)).resolves.toEqual({ topModel: null, tokensByModel: {}, scannedFiles: 0 });
+  });
 });
