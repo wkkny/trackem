@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "radix-nova",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/styles.css",
+    "baseColor": "neutral",
+    "cssVariables": true
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@trackem/ui/components",
+    "ui": "@trackem/ui/components",
+    "utils": "@trackem/ui/utils",
+    "lib": "@trackem/ui/lib",
+    "hooks": "@trackem/ui/hooks"
+  },
+  "registries": {}
+}

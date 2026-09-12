@@ -1,0 +1,103 @@
+{
+  "name": "@trackem/desktop",
+  "version": "0.1.0",
+  "description": "A system tray usage monitor for AI subscriptions.",
+  "main": "electron/dist/main.js",
+  "private": true,
+  "author": "Trackem",
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm build:electron && concurrently -k \"vite\" \"wait-on http://localhost:5173 && node ../../scripts/launch-electron.mjs\"",
+    "build": "pnpm build:renderer && pnpm build:electron",
+    "build:renderer": "tsc --noEmit -p tsconfig.json && vite build",
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "start": "node ../../scripts/launch-electron.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p electron/tsconfig.json && tsc -p electron/tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dist": "electron-builder --publish never",
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:win": "electron-builder --win --publish never"
+  },
+  "build": {
+    "appId": "com.trackem.app",
+    "productName": "Trackem",
+    "files": [
+      "dist/**/*",
+      "electron/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/trayTemplate.png",
+        "to": "trayTemplate.png"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "extraFiles": [
+        {
+          "from": "../../native/macos-tray/build/TrackemTray.app",
+          "to": "Frameworks/TrackemTray.app"
+        }
+      ],
+      "minimumSystemVersion": "13.0"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createStartMenuShortcut": true,
+      "createDesktopShortcut": false,
+      "shortcutName": "Trackem"
+    },
+    "directories": {
+      "output": "release"
+    }
+  },
+  "dependencies": {
+    "@trackem/core": "workspace:*"
+  },
+  "packageManager": "pnpm@12.3.4",
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.13",
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "shadcn": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0",
+    "wait-on": "^9.1.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "tailwindcss": "^4.3.3",
+    "@trackem/contracts": "workspace:*",
+    "@trackem/ui": "workspace:*",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}

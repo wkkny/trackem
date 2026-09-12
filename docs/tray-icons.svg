@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="400" viewBox="0 0 960 400">
+  <title>Trackem tray icon concepts</title>
+  <desc>Capacity bars, an open dial, and a Track T, compared on light and dark backgrounds.</desc>
+  <defs>
+    <g id="bars"><rect x="2" y="3" width="10" height="4" rx="2"/><rect x="14" y="3" width="2" height="4" rx="1"/><rect x="2" y="11" width="6" height="4" rx="2"/><rect x="10" y="11" width="6" height="4" rx="2"/></g>
+    <g id="dial" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 14a7 7 0 1 1 10 0"/><path d="m9 10 4-5"/></g>
+    <g id="track"><rect x="2" y="3" width="14" height="3" rx="1.5"/><rect x="7.5" y="5" width="3" height="11" rx="1.5"/><rect x="2" y="9" width="4" height="3" rx="1.5"/></g>
+  </defs>
+  <rect width="960" height="400" rx="20" fill="#f4f4f5"/>
+  <g font-family="system-ui, sans-serif" fill="#171717">
+    <text x="32" y="42" font-size="22" font-weight="600">Trackem / tray icon directions</text>
+    <text x="32" y="69" font-size="13" fill="#626262">Provisional vector concepts. Large preview + actual 18-point mark.</text>
+    <text x="36" y="112" font-size="16">01 Capacity bars</text>
+    <text x="356" y="112" font-size="16">02 Open dial</text>
+    <text x="676" y="112" font-size="16">03 Track T</text>
+    <use href="#bars" transform="translate(40 140) scale(4)"/><use href="#bars" transform="translate(150 170)"/>
+    <use href="#dial" transform="translate(360 140) scale(4)"/><use href="#dial" transform="translate(470 170)"/>
+    <use href="#track" transform="translate(680 140) scale(4)"/><use href="#track" transform="translate(790 170)"/>
+  </g>
+  <rect x="20" y="242" width="920" height="130" rx="12" fill="#202020"/>
+  <g fill="#f5f5f5" color="#f5f5f5">
+    <use href="#bars" transform="translate(40 266) scale(4)"/><use href="#bars" transform="translate(150 296)"/>
+    <use href="#dial" transform="translate(360 266) scale(4)"/><use href="#dial" transform="translate(470 296)"/>
+    <use href="#track" transform="translate(680 266) scale(4)"/><use href="#track" transform="translate(790 296)"/>
+  </g>
+</svg>

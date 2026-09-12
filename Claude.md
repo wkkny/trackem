@@ -22,12 +22,12 @@ The main process owns provider access and all secrets. The preload script expose
 
 The refresh path is:
 
-1. `electron/main.ts` checks enabled providers on startup, manually, from the tray popover, and every five minutes.
-2. `electron/providers/codex/index.ts` discovers profiles and reads each `auth.json` without writing it.
-3. `electron/providers/claude/index.ts` reads `.credentials.json`, with the default macOS Keychain fallback.
+1. `apps/desktop/electron/usage-service.ts` checks enabled providers on startup, manually, from the tray popover, and every five minutes.
+2. `apps/desktop/electron/providers/codex/index.ts` discovers profiles and reads each `auth.json` without writing it.
+3. `apps/desktop/electron/providers/claude/index.ts` reads `.credentials.json`, with the default macOS Keychain fallback.
 4. Adapters call provider OAuth usage endpoints and normalize supported five-hour and weekly windows.
 5. The main process adds in-memory forecast data and notifications, then publishes `usage:updated` over IPC.
-6. `src/main.tsx` renders the cached snapshot in the dashboard or compact tray popover.
+6. `apps/desktop/src/main.tsx` renders the cached snapshot in the dashboard or compact tray popover.
 
 Manual refresh is single-flight and has a 30-second cooldown for ordinary polling. Provider failures produce unavailable snapshots, not invented percentages. The main process backs off when every enabled account fails.
 
@@ -73,7 +73,7 @@ pnpm lint
 pnpm build
 ```
 
-Current local result: 69 tests pass in 9 files, TypeScript and builds pass, and macOS arm64 packaging completes unsigned. Biome emits 24 warnings in tests, so a clean lint report still needs follow-up.
+Current local result: 82 Vitest tests pass in 11 files and six Swift protocol tests pass, TypeScript and builds pass, and macOS arm64 packaging completes unsigned. Biome still emits non-blocking warnings in tests.
 
 Mocked adapter tests cover malformed credentials, expired credentials, HTTP failures, timeouts, retries, unsupported responses, profile discovery, and token redaction. They do not prove that live provider endpoints still match the adapters.
 
@@ -81,4 +81,12 @@ Native Windows behavior remains unverified. Before release, run every step in `d
 
 ## Editing guidance
 
-Keep changes narrow and update tests with behavior changes. Shared contracts live in `electron/contracts.ts`; do not duplicate them in the renderer. Prefer pure functions for normalization and forecast logic. Use the existing UI primitives and Tailwind classes. Do not add placeholder quotas, telemetry, or network calls outside the provider adapters.
+Keep changes narrow and update tests with behavior changes. Shared contracts live in `packages/contracts/src/index.ts`; do not duplicate them in the renderer. Prefer pure functions for normalization and forecast logic. Use the existing UI primitives and Tailwind classes. Do not add placeholder quotas, telemetry, or network calls outside the provider adapters.
+
+## Workspace architecture
+
+The desktop app lives in `apps/desktop`; the public Vite SPA lives in `apps/website`. Shared React/shadcn components, CSS and icons belong in `packages/ui`. There is no chat feature today; reusable chat components can be added there when needed.
+
+On macOS, `native/macos-tray` owns the Swift/AppKit status item and popover. `apps/desktop/electron/trays/macos.ts` supervises it through a bounded, versioned display-only pipe protocol. No credentials, account IDs, emails, paths or provider errors go to the helper. On Windows, `trays/electron-tray.ts` uses Electron Tray and `windows.ts` owns separate dashboard/popover BrowserWindows. `usage-service.ts` owns polling independently of UI.
+
+Read `docs/architecture.md` and `docs/macos-testing.md` before changing these boundaries. Native builds require Xcode or Command Line Tools; native tests use Swift Testing and need Swift 6+. Packaging output is `apps/desktop/release`; website output is `apps/website/dist`. macOS packaging currently matches the host architecture. Signing/notarization, native interaction checks and live quota comparisons remain release requirements.

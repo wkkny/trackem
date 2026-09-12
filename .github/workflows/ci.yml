@@ -26,6 +26,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: runner.os == 'Linux'
+        with:
+          name: trackem-website
+          path: apps/website/dist/
   package:
     needs: check
     strategy:
@@ -54,4 +59,11 @@ jobs:
         if: runner.os == 'Windows'
         with:
           name: trackem-windows-installer
-          path: dist/*.exe
+          path: apps/desktop/release/*.exe
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: runner.os == 'macOS'
+        with:
+          name: trackem-macos
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip

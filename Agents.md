@@ -32,25 +32,25 @@ pnpm dist:mac
 pnpm dist:win
 ```
 
-The local development command starts Vite and Electron together. In the Codex harness, unset `ELECTRON_RUN_AS_NODE` before running Electron. If it is set, Electron starts as plain Node and `app.requestSingleInstanceLock()` is undefined.
+The root development command builds shared packages and the Swift helper on macOS, then starts Vite and Electron. The launcher clears `ELECTRON_RUN_AS_NODE` and `CODEX_CI`. Run `pnpm dev:website` separately for the Vite SPA on port 5174.
 
 ## Source map
 
-- `src/main.tsx`: renderer app, dashboard, tray popover, navigation, theme, provider display, and refresh controls.
-- `src/components/settings.tsx`: provider access, extra profiles, startup, notifications, model scanning, and research settings.
-- `src/components/research.tsx`: local study answers, report preview, copy, and deletion.
-- `src/components/ui/`: shared UI primitives.
-- `src/lib/usage.ts`: pure quota formatting and pace calculations.
-- `electron/main.ts`: app lifecycle, tray, BrowserWindow, refresh loop, forecasts, notifications, power events, IPC, and single-instance handling.
-- `electron/contracts.ts`: shared main/preload/renderer data contracts.
-- `electron/preload.ts`: the narrow `window.trackem` contextBridge API.
-- `electron/config.ts`: config defaults, validation, path expansion, and private file persistence.
-- `electron/providers/codex/`: Codex OAuth reader, usage adapter, reset-credit adapter, profile discovery, and optional session-log scanner.
-- `electron/providers/claude/index.ts`: Claude Code credential reader, macOS Keychain fallback, and usage adapter.
-- `electron/forecast.ts`: observed-usage forecasts. History is in memory and is cleared on restart, quota reset, corrections, long gaps, and resume from sleep.
-- `electron/research.ts`: opt-in local study persistence and sanitized reports.
-- `electron/tray.ts`: work-area-aware popover placement.
-- `electron/*.test.ts`, `electron/providers/**/*.test.ts`, `src/lib/*.test.ts`: current test coverage. Provider network responses are mocked.
+- `apps/desktop/src/main.tsx`: renderer app, dashboard, tray popover, navigation, theme, provider display, and refresh controls.
+- `apps/desktop/src/components/settings.tsx`: provider access, extra profiles, startup, notifications, model scanning, and research settings.
+- `apps/desktop/src/components/research.tsx`: local study answers, report preview, copy, and deletion.
+- `packages/ui/src/components/`: shared UI primitives.
+- `packages/core/src/usage.ts`: pure quota formatting and pace calculations.
+- `apps/desktop/electron/main.ts`: app composition, IPC, notifications, configuration and single-instance handling.
+- `packages/contracts/src/index.ts`: shared main/preload/renderer data contracts.
+- `apps/desktop/electron/preload.ts`: the narrow `window.trackem` contextBridge API.
+- `apps/desktop/electron/config.ts`: config defaults, validation, path expansion, and private file persistence.
+- `apps/desktop/electron/providers/codex/`: Codex OAuth reader, usage adapter, reset-credit adapter, profile discovery, and optional session-log scanner.
+- `apps/desktop/electron/providers/claude/index.ts`: Claude Code credential reader, macOS Keychain fallback, and usage adapter.
+- `packages/core/src/forecast.ts`: observed-usage forecasts. History is in memory and is cleared on restart, quota reset, corrections, long gaps, and resume from sleep.
+- `apps/desktop/electron/research.ts`: opt-in local study persistence and sanitized reports.
+- `apps/desktop/electron/tray.ts`: work-area-aware popover placement.
+- `apps/desktop/electron/**/*.test.ts`, `packages/core/src/*.test.ts`, `native/macos-tray/Tests`: current test coverage. Provider network responses are mocked.
 
 ## Important implementation rules
 
@@ -60,7 +60,7 @@ The local development command starts Vite and Electron together. In the Codex ha
 - Preserve unavailable states when credentials are missing, expired, malformed, offline, or the provider response changes.
 - Provider requests must remain HTTPS, reject redirects, time out, and avoid leaking response bodies.
 - Keep the renderer sandboxed with context isolation and no Node integration. IPC handlers must validate the sender.
-- If changing the shared data shape, update `electron/contracts.ts`, the preload API, renderer types, adapters, and tests together.
+- If changing the shared data shape, update `packages/contracts/src/index.ts`, the preload API, renderer types, adapters, and tests together.
 - Optional Codex session scanning may read files containing prompts. It must retain only model statistics and remain opt-in.
 - Preferences and research files are private local files. POSIX writes use mode `0600`; Windows relies on the application-data ACL.
 
@@ -70,12 +70,12 @@ At the time this guide was written:
 
 - `pnpm check` passes.
 - TypeScript checks pass for the renderer, Electron source, and Electron tests.
-- 69 Vitest tests pass across 9 test files.
+- 82 Vitest tests pass across 11 test files; six Swift protocol tests also pass.
 - The renderer build and Electron build pass.
 - `pnpm dist:mac` completes locally as an unsigned arm64 ZIP and DMG.
 - Development Electron stays running when `ELECTRON_RUN_AS_NODE` and `CODEX_CI` are unset.
 
-Biome reports 24 warnings, mostly `any` and non-null assertions in test doubles and test fixtures. They do not currently fail `pnpm check`.
+Biome still reports non-blocking warnings, mostly `any` and non-null assertions in tests.
 
 ## Known release gaps
 
@@ -90,3 +90,11 @@ Before claiming release readiness, follow `docs/windows-testing.md`, compare liv
 ## Safe workflow
 
 Inspect the relevant source and tests before editing. Prefer `apply_patch` for file changes. Do not reset or overwrite unrelated work. After code changes, run the smallest relevant tests first, then `pnpm check` when practical. Do not add sample quota values or fake provider data to make the UI look populated.
+
+## Workspace architecture
+
+The desktop app lives in `apps/desktop`; the public Vite SPA lives in `apps/website`. Shared React/shadcn components, CSS and icons belong in `packages/ui`. There is no chat feature today; reusable chat components can be added there when needed.
+
+On macOS, `native/macos-tray` owns the Swift/AppKit status item and popover. `apps/desktop/electron/trays/macos.ts` supervises it through a bounded, versioned display-only pipe protocol. No credentials, account IDs, emails, paths or provider errors go to the helper. On Windows, `trays/electron-tray.ts` uses Electron Tray and `windows.ts` owns separate dashboard/popover BrowserWindows. `usage-service.ts` owns polling independently of UI.
+
+Read `docs/architecture.md` and `docs/macos-testing.md` before changing these boundaries. Native builds require Xcode or Command Line Tools; native tests use Swift Testing and need Swift 6+. Packaging output is `apps/desktop/release`; website output is `apps/website/dist`. macOS packaging currently matches the host architecture. Signing/notarization, native interaction checks and live quota comparisons remain release requirements.

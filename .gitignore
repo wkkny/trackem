@@ -9,3 +9,5 @@ release/
 !.env.example
 auth.json
 .codex*/
+.build/
+native/macos-tray/build/

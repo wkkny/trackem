@@ -1,6 +1,6 @@
 # Trackem
 
-Trackem is an Electron tray app for monitoring Codex and Claude subscription usage on macOS and Windows. It reads existing CLI logins and displays provider-reported quotas without sample values.
+Trackem monitors Codex and Claude subscription usage with a Swift/AppKit menu-bar popover on macOS, an Electron tray window on Windows, and a shared Electron dashboard. It reads existing CLI logins and displays provider-reported quotas without sample values.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6) ![License](https://img.shields.io/badge/license-MIT-black)
 
@@ -50,9 +50,9 @@ Forecasts use quota changes observed during the last two hours in the same reset
 
 History stays in memory and clears when Trackem quits. Notifications fire at 10% remaining or predicted exhaustion within an hour, at most once per account and quota window per app session. Restarting the app resets notification deduplication.
 
-## Windows
+## Desktop UI
 
-Left-click the tray for the compact view, right-click for the native menu, and use Escape or click outside to dismiss the popover. The dashboard and popover reuse one renderer. Installed Windows and macOS builds support starting hidden at login through Settings.
+On macOS, click the menu-bar item for a native AppKit popover. On Windows, left-click the tray for a separate compact Electron window. Right-click opens the action menu on either platform. Use Escape or click outside to dismiss the popover. Installed Windows and macOS builds support starting hidden at login through Settings.
 
 The Windows x64 installer creates a Start menu shortcut for notification identity. CI checks Windows builds and packages an installer. See [Windows release checks](docs/windows-testing.md) for native validation and resource measurement targets.
 
@@ -64,12 +64,22 @@ The [two-week pilot plan](docs/demand-validation.md) covers recruitment, retenti
 
 ## Development
 
-Requirements: Node.js 22+, pnpm, and a Codex or Claude Code OAuth login for live usage.
+Requirements: Node.js 22+, pnpm 12.3.4, and a Codex or Claude Code OAuth login for live usage. macOS builds need Xcode or Command Line Tools with Swift 5.9+. Native tests require Swift 6+.
 
 ```bash
 pnpm install
 pnpm dev
 ```
+
+The root command builds the shared packages and macOS helper before launching the desktop app. It clears Electron's Node-mode environment flags automatically. Provider code changes require a restart; renderer edits use Vite HMR.
+
+The separate Vite SPA website uses the same shadcn components and icons:
+
+```bash
+pnpm dev:website  # http://localhost:5174
+```
+
+Desktop Vite runs on port 5173. The website has no Electron API or account access. Deploy `apps/website/dist` to a static host after `pnpm build`.
 
 Quality checks:
 
@@ -89,26 +99,26 @@ pnpm dist:mac
 pnpm dist:win
 ```
 
+Installers are written to `apps/desktop/release`. The macOS bundle contains the Swift helper under `Contents/Frameworks/TrackemTray.app`. Native builds currently target the host architecture; universal builds are not configured. Local packages are unsigned/ad-hoc, not notarized releases.
+
 Windows packaging and tray behavior should be verified on a Windows machine before release.
 
 ## Project structure
 
 ```text
-electron/
-  main.ts                 Window, tray, notifications, refresh loop, and IPC
-  config.ts               Validated, private application preferences
-  contracts.ts            Main, preload, and renderer IPC contracts
-  preload.ts              Narrow contextBridge API
-  providers/codex/        OAuth usage adapter and local session scanner
-  providers/claude/       Claude Code credential reader and OAuth usage adapter
-  forecast.ts             Observed-usage forecasts
-  research.ts             Opt-in local study and sanitized reports
-  tray.ts                 Display-aware popover positioning
-src/
-  main.tsx                React application
-  lib/usage.ts            Pure pace and usage calculations
-  components/ui/          shadcn/ui primitives
+apps/
+  desktop/                Electron host and shared React dashboard
+  website/                Public Vite SPA
+native/
+  macos-tray/             Swift/AppKit helper and protocol tests
+packages/
+  contracts/              Shared TypeScript data contracts
+  core/                   Pure quota formatting and forecasts
+  ui/                     shadcn components, styles, icons and brand mark
+scripts/                  Native build and Electron launch tooling
 ```
+
+See [architecture and build boundaries](docs/architecture.md), [macOS release checks](docs/macos-testing.md), and [tray icon concepts](docs/tray-icons.md). The provisional capacity-bars mark is used in the macOS tray and web UI; the existing Windows ICO remains until a final direction is chosen.
 
 ## Privacy and security
 
