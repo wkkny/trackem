@@ -1,0 +1,32 @@
+[package]
+name = "trackem"
+version = "0.1.0"
+description = "A system tray usage monitor for AI subscriptions"
+authors = ["Trackem"]
+edition = "2021"
+
+[lib]
+name = "trackem_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+dirs = "6"
+futures = "0.3"
+hex = "0.4"
+httpdate = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+time = { version = "0.3", features = ["formatting", "parsing"] }
+tauri = { version = "2", features = ["image-png", "tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tokio = { version = "1", features = ["fs", "macros", "process", "sync", "time"] }
+walkdir = "2"

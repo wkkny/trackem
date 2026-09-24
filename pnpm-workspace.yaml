@@ -1,13 +1,9 @@
 packages: []
 allowBuilds:
   electron: true
-  electron-builder: true
-  electron-winstaller: true
   esbuild: true
   fsevents: true
 onlyBuiltDependencies:
   - electron
-  - electron-builder
-  - electron-winstaller
   - esbuild
   - fsevents

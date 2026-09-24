@@ -2,18 +2,18 @@
 
 ## What this project is
 
-Trackem is a private Electron tray app for Codex and Claude Code subscription usage. The Electron main process reads existing CLI OAuth credentials, calls provider usage endpoints, and sends normalized snapshots to a sandboxed React renderer. Trackem does not refresh or rewrite provider credentials.
+Trackem is a Tauri 2 desktop tray app for Codex and Claude Code subscription usage. The Rust process reads existing CLI OAuth credentials, calls provider usage endpoints, and sends normalized snapshots to a React renderer. Trackem does not refresh or rewrite provider credentials.
 
 Supported providers:
 
 - Codex, using the default `$CODEX_HOME` or `~/.codex`, plus up to 20 configured profile directories containing `auth.json`.
 - Claude Code, using `$CLAUDE_CONFIG_DIR` or `~/.claude/.credentials.json`. On the default macOS profile it can also read the `Claude Code-credentials` Keychain item.
 
-There is no Trackem backend or automatic telemetry. Optional model scanning and the local research study are off by default.
+There is no Trackem server or automatic telemetry. Optional model scanning and the local research study are off by default.
 
 ## Fast path
 
-Use Node.js 22+ and pnpm 12.3.4.
+Use Node.js 22+, pnpm 12.3.4, and the stable Rust toolchain.
 
 ```bash
 pnpm install
@@ -32,61 +32,57 @@ pnpm dist:mac
 pnpm dist:win
 ```
 
-The local development command starts Vite and Electron together. In the Codex harness, unset `ELECTRON_RUN_AS_NODE` before running Electron. If it is set, Electron starts as plain Node and `app.requestSingleInstanceLock()` is undefined.
+macOS development requires Xcode Command Line Tools. Windows development requires Microsoft C++ Build Tools and WebView2.
 
 ## Source map
 
-- `src/main.tsx`: renderer app, dashboard, tray popover, navigation, theme, provider display, and refresh controls.
+- `src/main.tsx`: React dashboard, tray popover, navigation, theme, provider display, and refresh controls.
 - `src/components/settings.tsx`: provider access, extra profiles, startup, notifications, model scanning, and research settings.
 - `src/components/research.tsx`: local study answers, report preview, copy, and deletion.
 - `src/components/ui/`: shared UI primitives.
+- `src/lib/desktop.ts`: typed Tauri commands and events.
 - `src/lib/usage.ts`: pure quota formatting and pace calculations.
-- `electron/main.ts`: app lifecycle, tray, BrowserWindow, refresh loop, forecasts, notifications, power events, IPC, and single-instance handling.
-- `electron/contracts.ts`: shared main/preload/renderer data contracts.
-- `electron/preload.ts`: the narrow `window.trackem` contextBridge API.
-- `electron/config.ts`: config defaults, validation, path expansion, and private file persistence.
-- `electron/providers/codex/`: Codex OAuth reader, usage adapter, reset-credit adapter, profile discovery, and optional session-log scanner.
-- `electron/providers/claude/index.ts`: Claude Code credential reader, macOS Keychain fallback, and usage adapter.
-- `electron/forecast.ts`: observed-usage forecasts. History is in memory and is cleared on restart, quota reset, corrections, long gaps, and resume from sleep.
-- `electron/research.ts`: opt-in local study persistence and sanitized reports.
-- `electron/tray.ts`: work-area-aware popover placement.
-- `electron/*.test.ts`, `electron/providers/**/*.test.ts`, `src/lib/*.test.ts`: current test coverage. Provider network responses are mocked.
+- `src-tauri/src/lib.rs`: app lifecycle, tray, window, refresh loop, forecasts, notifications, commands, and single-instance handling.
+- `src-tauri/src/types.rs`: Rust data contracts serialized to the renderer.
+- `src-tauri/src/config.rs`: config defaults, validation, path expansion, and private file persistence.
+- `src-tauri/src/providers/codex.rs`: Codex OAuth reader and usage adapter.
+- `src-tauri/src/providers/claude.rs`: Claude Code credential reader, macOS Keychain fallback, and usage adapter.
+- `src-tauri/src/providers/sessions.rs`: optional local session-log scanner.
+- `src-tauri/src/forecast.rs`: observed-usage forecasts.
+- `src-tauri/src/research.rs`: opt-in local study persistence and sanitized reports.
+- `src-tauri/capabilities/main.json`: permissions for the bundled renderer.
+
+The `electron/` directory holds the previous TypeScript implementation and its tests as migration references. Those tests do not cover the Rust adapters or Tauri lifecycle.
 
 ## Important implementation rules
 
-- Keep OAuth tokens in the Electron main process. Do not send tokens, raw provider responses, prompts, or API error bodies across IPC.
+- Keep OAuth tokens in the Rust process. Do not send tokens, raw provider responses, prompts, or API error bodies across Tauri commands or events.
 - Keep provider data read-only. The CLI owns authentication and token lifecycle.
 - Only use provider-reported subscription quota percentages. Do not infer quota from local token counts or API billing data.
 - Preserve unavailable states when credentials are missing, expired, malformed, offline, or the provider response changes.
 - Provider requests must remain HTTPS, reject redirects, time out, and avoid leaking response bodies.
-- Keep the renderer sandboxed with context isolation and no Node integration. IPC handlers must validate the sender.
-- If changing the shared data shape, update `electron/contracts.ts`, the preload API, renderer types, adapters, and tests together.
+- Keep filesystem and network access in Rust. Expose only the command needed by each renderer action.
+- If changing shared data, update `src-tauri/src/types.rs`, `src/types.ts`, `src/lib/desktop.ts`, provider adapters, and relevant callers together.
 - Optional Codex session scanning may read files containing prompts. It must retain only model statistics and remain opt-in.
 - Preferences and research files are private local files. POSIX writes use mode `0600`; Windows relies on the application-data ACL.
 
-## What is verified here
+## Current verification
 
-At the time this guide was written:
-
-- `pnpm check` passes.
-- TypeScript checks pass for the renderer, Electron source, and Electron tests.
-- 69 Vitest tests pass across 9 test files.
-- The renderer build and Electron build pass.
-- `pnpm dist:mac` completes locally as an unsigned arm64 ZIP and DMG.
-- Development Electron stays running when `ELECTRON_RUN_AS_NODE` and `CODEX_CI` are unset.
-
-Biome reports 24 warnings, mostly `any` and non-null assertions in test doubles and test fixtures. They do not currently fail `pnpm check`.
+- `cargo check --manifest-path src-tauri/Cargo.toml` passes in this workspace.
+- `pnpm build:renderer` passes.
+- Native tray interaction, notifications, login startup, installed-app behavior, and live provider logins have not been verified after the Tauri migration.
+- Existing Vitest checks exercise the previous Electron TypeScript implementation. They do not validate Rust provider behavior or Tauri lifecycle.
 
 ## Known release gaps
 
 - Live Codex and Claude accounts have not been verified in this workspace. Provider OAuth endpoints can change independently of Trackem.
 - Native Windows tray behavior, notifications, startup-at-login behavior, WSL paths, and installed-app interaction still require a Windows machine.
 - Windows performance targets in `docs/windows-testing.md` are targets, not measurements.
-- There are no renderer interaction tests. Most provider coverage uses mocked responses.
-- Packaging is unsigned in local development. CI disables automatic code-signing discovery.
+- Rust provider and Tauri lifecycle tests have not been ported from the Electron implementation.
+- Tauri builds are unsigned in local development.
 
 Before claiming release readiness, follow `docs/windows-testing.md`, compare live quotas with each provider, and record native performance measurements.
 
 ## Safe workflow
 
-Inspect the relevant source and tests before editing. Prefer `apply_patch` for file changes. Do not reset or overwrite unrelated work. After code changes, run the smallest relevant tests first, then `pnpm check` when practical. Do not add sample quota values or fake provider data to make the UI look populated.
+Inspect the relevant source and current changes before editing. Prefer `apply_patch` for file changes. Do not reset or overwrite unrelated work. Do not add sample quota values or fake provider data to make the UI look populated.

@@ -4,9 +4,14 @@ import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 
 export default defineConfig({
-  // Installed Electron builds load index.html via file:, not a web-server root.
+  // Keep relative asset URLs working in the bundled desktop webview.
   base: './',
   plugins: [react(), tailwindcss()],
+  server: {
+    port: 1420,
+    strictPort: true,
+    watch: { ignored: ['**/src-tauri/**'] },
+  },
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),

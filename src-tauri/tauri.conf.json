@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Trackem",
+  "version": "0.1.0",
+  "identifier": "com.trackem.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev:renderer",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build:renderer",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": false,
+    "security": {
+      "capabilities": ["main"],
+      "freezePrototype": true,
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Trackem",
+        "width": 1080,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 600,
+        "center": true,
+        "visible": false,
+        "resizable": true,
+        "decorations": true,
+        "skipTaskbar": true,
+        "backgroundColor": "#f7f8fa",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 20, "y": 20 }
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "category": "Productivity",
+    "icon": [
+      "../build/icon.icns",
+      "../build/icon.ico",
+      "../build/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "dmg": {}
+    },
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installMode": "currentUser",
+        "startMenuFolder": "Trackem"
+      },
+      "webviewInstallMode": { "type": "downloadBootstrapper" }
+    }
+  }
+}

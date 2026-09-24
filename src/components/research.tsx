@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ResearchAnswers, ResearchReport } from '../../electron/research';
+import type { ResearchAnswers, ResearchReport } from '../types';
+import { desktop, isDesktopApp } from '@/lib/desktop';
 import { Button } from '@/components/ui/button';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
@@ -12,15 +13,15 @@ export function ResearchPage({ enabled, openSettings }: { enabled: boolean; open
   const apply = useCallback((next: ResearchReport) => { setReport(next); setAnswers(next.answers); }, []);
   useEffect(() => {
     if (!enabled) return;
-    void window.trackem?.getResearch().then(apply).catch(() => setMessage('Could not read local study data.'));
+    if (isDesktopApp()) void desktop.getResearch().then(apply).catch(() => setMessage('Could not read local study data.'));
   }, [apply, enabled]);
   const run = async (action: 'save' | 'copy' | 'clear') => {
-    if (!window.trackem || !answers) return;
+    if (!isDesktopApp() || !answers) return;
     setBusy(true); setMessage('');
     try {
-      if (action === 'clear') apply(await window.trackem.clearResearch());
-      else if (action === 'save') apply(await window.trackem.saveResearch(answers));
-      else await window.trackem.copyResearch();
+      if (action === 'clear') apply(await desktop.clearResearch());
+      else if (action === 'save') apply(await desktop.saveResearch(answers));
+      else await desktop.copyResearch();
       setMessage(action === 'copy' ? 'Report copied. Share it with the person who invited you to try Trackem.' : action === 'clear' ? 'Study data deleted. Counting starts again on your next app open while enabled.' : 'Answers saved locally. Review the report below before copying.');
     } catch { setMessage('Could not complete this action. Try again.'); }
     finally { setBusy(false); }
