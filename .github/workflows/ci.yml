@@ -34,7 +34,17 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck renderer and Rust
+        run: pnpm typecheck
+      - name: Run tests
+        run: pnpm test
+      - name: Build renderer
+        run: pnpm build:renderer
+      - name: Build Linux app
+        if: runner.os == 'Linux'
+        run: pnpm build
   package:
     needs: check
     strategy:
