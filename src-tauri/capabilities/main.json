@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Trackem's bundled renderer can call only its desktop commands and receive app events.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}

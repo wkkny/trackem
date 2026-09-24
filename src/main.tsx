@@ -4,7 +4,8 @@ import { LuActivity, LuBlocks, LuFileText, LuLayoutDashboard, LuMoon, LuRefreshC
 import { AiOutlineOpenAI } from 'react-icons/ai';
 import { SiClaude } from 'react-icons/si';
 import './index.css';
-import type { ConfigPayload, DiagnosticEntry, UsageSnapshot, UsageSnapshotPayload, UsageWindow } from './types';
+import type { ConfigPayload, DiagnosticEntry, TrackemConfig, UsageSnapshot, UsageSnapshotPayload, UsageWindow } from './types';
+import { desktop, isDesktopApp } from '@/lib/desktop';
 import { formatDuration, percentLeft } from '@/lib/usage';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -14,6 +15,7 @@ import { Separator } from '@/components/ui/separator';
 import { Spinner } from '@/components/ui/spinner';
 import { SettingsPage } from '@/components/settings';
 import { ResearchPage } from '@/components/research';
+import { ProviderSetupDialog } from '@/components/provider-setup-dialog';
 
 const IS_MAC = /Mac/.test(navigator.platform);
 const name = (id: UsageSnapshot['providerId']) => id === 'codex' ? 'Codex' : 'Claude';
@@ -117,6 +119,8 @@ function App() {
   const [active, setActive] = useState('Overview');
   const [data, setData] = useState<UsageSnapshotPayload>({ codex: [], claude: [], diagnostics: [], lastCheckedAt: null, view: 'dashboard' });
   const [configPayload, setConfigPayload] = useState<ConfigPayload | null>(null);
+  const [providerDialogOpen, setProviderDialogOpen] = useState(false);
+  const [providerDialogConfig, setProviderDialogConfig] = useState<TrackemConfig | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [now, setNow] = useState(Date.now);
@@ -124,13 +128,24 @@ function App() {
   const applyPayload = useCallback((next: UsageSnapshotPayload) => { setData(next); setNow(Date.now()); }, []);
 
   useEffect(() => {
-    const api = window.trackem;
-    if (!api) { setError('Open Trackem as a desktop app to read local provider data. Browser previews do not contain sample quotas.'); return; }
-    const unsubscribe = api.onUsageUpdated(applyPayload);
-    void api.getUsage().then(applyPayload).catch(() => setError('Could not load provider data.'));
-    void api.getConfig().then(setConfigPayload).catch(() => setError('Could not load preferences.'));
-    return unsubscribe;
+    if (!isDesktopApp()) { setError('Open Trackem as a desktop app to read local provider data. Browser previews do not contain sample quotas.'); return; }
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+    void desktop.onUsageUpdated(applyPayload).then(stop => {
+      if (cancelled) stop();
+      else unsubscribe = stop;
+    }).catch(() => setError('Could not subscribe to provider updates.'));
+    void desktop.getUsage().then(applyPayload).catch(() => setError('Could not load provider data.'));
+    void desktop.getConfig().then(setConfigPayload).catch(() => setError('Could not load preferences.'));
+    return () => { cancelled = true; unsubscribe?.(); };
   }, [applyPayload]);
+  useEffect(() => {
+    const hideOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') void desktop.hide();
+    };
+    window.addEventListener('keydown', hideOnEscape);
+    return () => window.removeEventListener('keydown', hideOnEscape);
+  }, []);
   useEffect(() => {
     // No renderer timer while hidden. Native provider polling is independent.
     let timer: number | undefined;
@@ -143,51 +158,103 @@ function App() {
   }, []);
 
   const handleRefresh = useCallback(() => {
-    if (!window.trackem) return;
+    if (!isDesktopApp()) return;
     setRefreshing(true); setError('');
-    void window.trackem.refreshUsage().catch(() => setError('Refresh failed. Try again.')).finally(() => setRefreshing(false));
+    void desktop.refreshUsage().catch(() => setError('Refresh failed. Try again.')).finally(() => setRefreshing(false));
   }, []);
-  const snapshots = [...data.codex, ...data.claude];
+  const snapshots = [...data.codex, ...data.claude].filter(snapshot => snapshot.error?.kind !== 'missing-credential');
   const connected = snapshots.filter(snapshot => snapshot.ok);
+  const hasConfiguredProvider = Boolean(configPayload?.config.codexEnabled || configPayload?.config.claudeEnabled);
   const readyCodex = data.codex.filter(s => s.ok && s.windows.fiveHour && s.windows.weekly && Date.parse(s.updatedAt) > now - 15 * 60_000 && Object.values(s.windows).every(w => w.resetAt && Date.parse(w.resetAt) > now));
   const best = readyCodex.length > 1 ? [...readyCodex].sort((a, b) => Math.max(...Object.values(a.windows).map(w => w.usedPercent)) - Math.max(...Object.values(b.windows).map(w => w.usedPercent)))[0] : null;
-  const refreshButton = <Button variant="outline" size="icon" onClick={handleRefresh} disabled={refreshing || !window.trackem} aria-label="Refresh usage">{refreshing ? <Spinner /> : <LuRefreshCw />}</Button>;
+  const refreshButton = <Button variant="outline" size="icon" onClick={handleRefresh} disabled={refreshing || !isDesktopApp()} aria-label="Refresh usage">{refreshing ? <Spinner /> : <LuRefreshCw />}</Button>;
+  const openProviderSetup = (config: TrackemConfig | null = configPayload?.config ?? null) => {
+    setProviderDialogConfig(config);
+    setProviderDialogOpen(true);
+  };
 
   if (data.view === 'popover') return (
     <main className="flex h-screen flex-col bg-background text-foreground" aria-label="Trackem tray usage">
-      <header className="flex shrink-0 items-center justify-between border-b p-4"><h1 className="font-heading text-lg font-bold">Trackem</h1><div className="flex gap-2">{refreshButton}<Button variant="ghost" size="icon" onClick={() => window.trackem?.minimize()} aria-label="Hide to tray"><LuX /></Button></div></header>
+      <header className="flex shrink-0 items-center justify-between border-b p-4"><h1 className="font-heading text-lg font-bold">Trackem</h1><div className="flex gap-2">{refreshButton}<Button variant="ghost" size="icon" onClick={() => void desktop.hide()} aria-label="Hide to tray"><LuX /></Button></div></header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4">
         {error && <p role="alert" className="py-3 text-sm text-destructive">{error}</p>}
         <ProviderList snapshots={snapshots} now={now} />
-        {!snapshots.length && <p className="py-6 text-sm text-muted-foreground">{data.lastCheckedAt ? 'Monitoring is disabled. Open Settings to enable a provider.' : 'Checking local provider logins…'}</p>}
+        {!snapshots.length && <p className="py-6 text-sm text-muted-foreground">{!configPayload ? 'Loading provider settings…' : hasConfiguredProvider ? 'No local provider login found yet. Open the dashboard to check again.' : 'No providers added. Open the dashboard to add Codex or Claude.'}</p>}
       </div>
-      <footer className="flex shrink-0 items-center justify-between gap-2 border-t p-4"><p className="text-xs text-muted-foreground">Credentials stay local</p><Button variant="outline" onClick={() => window.trackem?.openDashboard()}>Open dashboard</Button></footer>
+      <footer className="flex shrink-0 items-center justify-between gap-2 border-t p-4"><p className="text-xs text-muted-foreground">Credentials stay local</p><Button variant="outline" onClick={() => void desktop.openDashboard()}>Open dashboard</Button></footer>
     </main>
   );
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      <div className="grid h-[52px] shrink-0 grid-cols-[88px_1fr_88px] items-center border-b bg-card select-none [-webkit-app-region:drag]">
-        <div /><div className="justify-self-center font-heading text-base font-bold">trackem</div>
-        <div className="justify-self-end pr-3 [-webkit-app-region:no-drag]">{!IS_MAC && <Button variant="ghost" size="icon" onClick={() => window.trackem?.minimize()} aria-label="Hide to tray"><LuX /></Button>}</div>
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-14 shrink-0 flex-col border-r bg-sidebar p-2 md:w-[218px] md:p-3">
-          {NAV_GROUPS.map(group => <div key={group.label} className="mb-4"><p className="hidden px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[.09em] text-muted-foreground md:block">{group.label}</p><nav aria-label={group.label} className="flex flex-col gap-1">{group.items.map(item => <Button key={item.id} variant={active === item.id ? 'secondary' : 'ghost'} className="w-full justify-start max-md:justify-center max-md:px-0" onClick={() => setActive(item.id)} aria-label={item.id} aria-current={active === item.id ? 'page' : undefined}><item.icon data-icon="inline-start" /><span className="max-md:hidden">{item.id}</span></Button>)}</nav></div>)}
-          <div className="mt-auto"><Button variant="ghost" size="icon" onClick={toggle} aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}>{dark ? <LuSun /> : <LuMoon />}</Button></div>
-        </aside>
-        <main className="flex-1 overflow-x-hidden overflow-y-auto px-5 py-6 md:px-10 md:py-8">
-          <header className="mb-8 flex items-center justify-between gap-4"><h1 className="font-heading text-2xl font-bold md:text-3xl">{active}</h1>{refreshButton}</header>
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      <aside className="flex h-full w-14 shrink-0 flex-col border-r bg-sidebar md:w-[218px]">
+        <div
+          data-tauri-drag-region
+          className={cn('flex h-[52px] shrink-0 items-center border-b px-3 select-none [-webkit-app-region:drag]', IS_MAC && 'md:pl-[76px]')}
+        >
+          <div data-tauri-drag-region className={cn('flex items-center gap-2.5', IS_MAC && 'max-md:hidden')}>
+            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+              <LuActivity size={15} aria-hidden="true" />
+            </span>
+            <span className="hidden font-heading text-sm font-bold md:block">trackem</span>
+          </div>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3 md:px-3">
+          {NAV_GROUPS.map(group => (
+            <div key={group.label} className="mb-4">
+              <p className="hidden px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[.09em] text-muted-foreground md:block">{group.label}</p>
+              <nav aria-label={group.label} className="flex flex-col gap-1">
+                {group.items.map(item => (
+                  <Button
+                    key={item.id}
+                    variant={active === item.id ? 'secondary' : 'ghost'}
+                    className="w-full justify-start max-md:justify-center max-md:px-0"
+                    onClick={() => setActive(item.id)}
+                    aria-label={item.id}
+                    aria-current={active === item.id ? 'page' : undefined}
+                  >
+                    <item.icon data-icon="inline-start" />
+                    <span className="max-md:hidden">{item.id}</span>
+                  </Button>
+                ))}
+              </nav>
+            </div>
+          ))}
+          <div className="mt-auto pt-4">
+            <Button variant="ghost" size="icon" onClick={toggle} aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}>
+              {dark ? <LuSun /> : <LuMoon />}
+            </Button>
+          </div>
+        </div>
+      </aside>
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header
+          data-tauri-drag-region
+          className="flex h-[52px] shrink-0 items-center justify-between border-b bg-sidebar px-5 select-none md:px-8 [-webkit-app-region:drag]"
+        >
+          <h1 className="font-heading text-base font-bold">{active}</h1>
+          <div className="flex items-center gap-2 [-webkit-app-region:no-drag]">
+            {refreshButton}
+            {!IS_MAC && <Button variant="ghost" size="icon" onClick={() => void desktop.hide()} aria-label="Hide to tray"><LuX /></Button>}
+          </div>
+        </header>
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-6 md:px-10 md:py-8">
           {error && <p role="alert" className="mb-6 text-sm text-destructive">{error}</p>}
           {active === 'Overview' || active === 'Providers' ? <div className="flex flex-col gap-6">
-            <section className="border-b pb-5"><h2 className="font-heading text-xl font-bold">{active === 'Overview' ? 'Your usage at a glance' : 'Codex and Claude connections'}</h2><p className="mt-2 text-sm text-muted-foreground">{connected.length} connected · {snapshots.length - connected.length} unavailable</p><p className="mt-1 text-xs text-muted-foreground">{data.lastCheckedAt ? `Last check ${new Date(data.lastCheckedAt).toLocaleString()}` : 'Waiting for first check'}</p></section>
-            {active === 'Providers' && <section className="flex flex-col gap-3"><p className="text-sm text-muted-foreground">Sign in with <code>codex login</code> or <code>claude</code>, then refresh. Trackem reads existing OAuth logins. API keys cannot report subscription quotas.</p><Button variant="outline" className="self-start" onClick={() => setActive('Settings')}>Provider access and profile settings</Button></section>}
+            <section className="border-b pb-5"><h2 className="font-heading text-xl font-bold">{active === 'Overview' ? 'Your usage at a glance' : 'Codex and Claude connections'}</h2><p className="mt-2 text-sm text-muted-foreground">{snapshots.length ? `${connected.length} connected · ${snapshots.length - connected.length} unavailable` : !configPayload ? 'Loading provider settings…' : hasConfiguredProvider ? 'No local provider login found yet' : 'Add a provider to start'}</p><p className="mt-1 text-xs text-muted-foreground">{hasConfiguredProvider && data.lastCheckedAt ? `Last check ${new Date(data.lastCheckedAt).toLocaleString()}` : hasConfiguredProvider ? 'Waiting for the first provider check' : 'Provider checks start when you add one'}</p></section>
+            {active === 'Providers' && snapshots.length > 0 && <section className="flex flex-col gap-3"><p className="text-sm text-muted-foreground">Add Codex or Claude Code and Trackem will look for an existing local CLI login. API keys cannot report subscription quotas.</p><Button className="self-start" onClick={() => openProviderSetup()}>Add provider</Button></section>}
             {best && active === 'Overview' && <section className="border-b pb-4"><p className="text-xs text-muted-foreground">Codex account with the most headroom across both windows</p><p className="mt-1 text-sm font-bold">{best.account.label}</p></section>}
             <section><ProviderList snapshots={snapshots} now={now} /></section>
-            {!snapshots.length && <Empty><EmptyHeader><EmptyMedia variant="icon"><AiOutlineOpenAI /></EmptyMedia><EmptyTitle>{data.lastCheckedAt ? 'No providers enabled' : 'Waiting for provider data'}</EmptyTitle><EmptyDescription>Trackem shows only provider-reported quotas. Enable local access in Settings.</EmptyDescription></EmptyHeader><EmptyContent><Button onClick={() => setActive('Settings')}>Open settings</Button></EmptyContent></Empty>}
-          </div> : active === 'Diagnostics' ? <DiagnosticsPage entries={data.diagnostics} /> : active === 'Early feedback' ? <ResearchPage enabled={configPayload?.config.localResearch ?? false} openSettings={() => setActive('Settings')} /> : <SettingsPage configPayload={configPayload} onSaved={setConfigPayload} />}
-        </main>
-      </div>
+            {!snapshots.length && <Empty><EmptyHeader><EmptyMedia variant="icon"><LuActivity /></EmptyMedia><EmptyTitle>{!configPayload ? 'Loading provider settings…' : hasConfiguredProvider ? 'No local login found yet' : 'No providers added'}</EmptyTitle><EmptyDescription>{!configPayload ? 'Loading your local preferences.' : hasConfiguredProvider ? 'Trackem could not find a local login for the selected provider. Sign in with its CLI, then check again.' : 'Add Codex or Claude Code. Trackem will look for its existing CLI login on this device.'}</EmptyDescription></EmptyHeader><EmptyContent><Button onClick={() => openProviderSetup()} disabled={!configPayload}>Add provider</Button></EmptyContent></Empty>}
+          </div> : active === 'Diagnostics' ? <DiagnosticsPage entries={data.diagnostics} /> : active === 'Early feedback' ? <ResearchPage enabled={configPayload?.config.localResearch ?? false} openSettings={() => setActive('Settings')} /> : <SettingsPage configPayload={configPayload} onSaved={setConfigPayload} onAddProvider={openProviderSetup} />}
+        </div>
+      </main>
+      <ProviderSetupDialog
+        open={providerDialogOpen}
+        onOpenChange={open => setProviderDialogOpen(open)}
+        config={providerDialogConfig}
+        onSaved={setConfigPayload}
+      />
     </div>
   );
 }

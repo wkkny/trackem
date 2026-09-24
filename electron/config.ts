@@ -9,8 +9,8 @@ export const DEFAULT_CONFIG: TrackemConfig = {
   codexProfileHomes: [],
   notifyOnResetExpiry: true,
   resetExpiryDays: 7,
-  codexEnabled: true,
-  claudeEnabled: true,
+  codexEnabled: false,
+  claudeEnabled: false,
   claudeHome: '',
   scanLocalModels: false,
   launchAtLogin: false,
@@ -33,8 +33,8 @@ export function normalizeConfig(value: unknown): TrackemConfig {
     .map(expandHome);
 
   return {
-    codexEnabled: typeof input.codexEnabled === 'boolean' ? input.codexEnabled : true,
-    claudeEnabled: typeof input.claudeEnabled === 'boolean' ? input.claudeEnabled : true,
+    codexEnabled: typeof input.codexEnabled === 'boolean' ? input.codexEnabled : false,
+    claudeEnabled: typeof input.claudeEnabled === 'boolean' ? input.claudeEnabled : false,
     claudeHome: typeof input.claudeHome === 'string' && input.claudeHome.trim() ? expandHome(input.claudeHome) : '',
     scanLocalModels: input.scanLocalModels === true,
     launchAtLogin: input.launchAtLogin === true,
