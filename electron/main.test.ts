@@ -9,7 +9,11 @@ vi.mock('./providers/codex', () => ({ getSnapshots: state.getCodex }));
 vi.mock('./providers/claude', () => ({ getClaudeSnapshot: state.getClaude }));
 vi.mock('./config', async importOriginal => {
   const original = await importOriginal<typeof import('./config')>();
-  return { ...original, loadConfig: () => ({ ...original.DEFAULT_CONFIG }), saveConfig: (_file: string, value: unknown) => original.normalizeConfig(value) };
+  return {
+    ...original,
+    loadConfig: () => ({ ...original.DEFAULT_CONFIG, codexEnabled: true, claudeEnabled: true }),
+    saveConfig: (_file: string, value: unknown) => original.normalizeConfig(value),
+  };
 });
 vi.mock('./research', () => ({ LocalResearch: class { recordOpen = state.studyOpen; setEnabled = vi.fn(); report = () => ({}); } }));
 vi.mock('electron', async () => {
